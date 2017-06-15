@@ -99,13 +99,13 @@ python_version_tests() {
 
   # Expensive dependencies install from Continuum package repo
   conda install -y -q pip numpy pandas
-  pip install --install-option="--no-cython-compile" https://github.com/cython/cython/archive/master.zip
 
   # Build C++ libraries
   build_arrow_libraries arrow-build-$PYTHON_VERSION $ARROW_HOME
 
   # Other stuff pip install
   pip install -r requirements.txt
+  pip install --install-option="--no-cython-compile" https://github.com/cython/cython/archive/master.zip
 
   python setup.py build_ext --inplace --with-parquet --with-jemalloc
 
