@@ -98,7 +98,8 @@ python_version_tests() {
   conda install -y -q nomkl
 
   # Expensive dependencies install from Continuum package repo
-  conda install -y -q pip numpy pandas cython
+  conda install -y -q pip numpy pandas
+  pip install --install-option="--no-cython-compile" https://github.com/cython/cython/archive/master.zip
 
   # Build C++ libraries
   build_arrow_libraries arrow-build-$PYTHON_VERSION $ARROW_HOME
