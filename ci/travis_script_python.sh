@@ -105,7 +105,7 @@ python_version_tests() {
 
   # Other stuff pip install
   pip install -r requirements.txt
-  pip install --install-option="--no-cython-compile" https://github.com/cython/cython/archive/master.zip
+  pip install --install-option="--no-cython-compile" https://github.com/cython/cython/archive/704ba4dabfacd2621b1db59a4182def6a31674cf.zip
 
   python setup.py build_ext --inplace --with-parquet --with-jemalloc
 
