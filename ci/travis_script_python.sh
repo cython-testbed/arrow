@@ -52,7 +52,7 @@ build_parquet_cpp() {
       -DPARQUET_BUILD_BENCHMARKS=off \
       -DPARQUET_BUILD_EXECUTABLES=off \
       -DPARQUET_ZLIB_VENDORED=off \
-      -DPARQUET_BUILD_TESTS=off \
+      -DPARQUET_BUILD_TESTS=on \
       ..
 
   make -j${CPU_COUNT}
@@ -72,6 +72,8 @@ function build_arrow_libraries() {
 
   cmake -DARROW_BUILD_TESTS=off \
         -DARROW_PYTHON=on \
+        -DPLASMA_PYTHON=on \
+        -DARROW_PLASMA=on \
         -DCMAKE_INSTALL_PREFIX=$2 \
         $CPP_DIR
 
@@ -107,10 +109,9 @@ python_version_tests() {
   pip install -r requirements.txt
   pip install --install-option="--no-cython-compile" https://github.com/cython/cython/archive/9b3dd8ec9d0b699438bb5f179d4812fbbbae73ed.zip
 
-  python setup.py build_ext --inplace --with-parquet --with-jemalloc
+  python setup.py build_ext --inplace --with-parquet
 
   python -c "import pyarrow.parquet"
-  python -c "import pyarrow._jemalloc"
 
   python -m pytest -vv -r sxX pyarrow --parquet
 
