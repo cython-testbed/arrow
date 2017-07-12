@@ -1,5 +1,3 @@
-#!/usr/bin/env ruby
-#
 # Licensed to the Apache Software Foundation (ASF) under one
 # or more contributor license agreements.  See the NOTICE file
 # distributed with this work for additional information
@@ -17,33 +15,13 @@
 # specific language governing permissions and limitations
 # under the License.
 
-require "pathname"
-require "test-unit"
+prefix=@CMAKE_INSTALL_PREFIX@
+libdir=${prefix}/@CMAKE_INSTALL_LIBDIR@
+includedir=${prefix}/include
 
-base_dir = Pathname(__dir__).parent
-typelib_dir = base_dir + "arrow-glib"
-test_dir = base_dir + "test"
-
-ENV["GI_TYPELIB_PATH"] = [
-  typelib_dir.to_s,
-  ENV["GI_TYPELIB_PATH"],
-].compact.join(File::PATH_SEPARATOR)
-
-require "gi"
-
-Arrow = GI.load("Arrow")
-module Arrow
-  class Buffer
-    alias_method :initialize_raw, :initialize
-    def initialize(data)
-      initialize_raw(data)
-      @data = data
-    end
-  end
-end
-
-require "tempfile"
-require_relative "helper/buildable"
-require_relative "helper/omittable"
-
-exit(Test::Unit::AutoRunner.run(true, test_dir.to_s))
+Name: Apache Arrow Python
+Description: Python integration library for Apache Arrow
+Version: @ARROW_VERSION@
+Requires: arrow
+Libs: -L${libdir} -larrow_python
+Cflags: -I${includedir} -I@PYTHON_INCLUDE_DIRS@

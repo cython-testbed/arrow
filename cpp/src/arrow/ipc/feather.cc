@@ -498,7 +498,7 @@ class TableWriter::TableWriterImpl : public ArrayVisitor {
 
   Status Finalize() {
     RETURN_NOT_OK(CheckStarted());
-    metadata_.Finish();
+    RETURN_NOT_OK(metadata_.Finish());
 
     auto buffer = metadata_.GetBuffer();
 
@@ -562,7 +562,7 @@ class TableWriter::TableWriterImpl : public ArrayVisitor {
       // Write the variable-length offsets
       RETURN_NOT_OK(WritePadded(stream_.get(),
           reinterpret_cast<const uint8_t*>(bin_values.raw_value_offsets()), offset_bytes,
-          &bytes_written))
+          &bytes_written));
       meta->total_bytes += bytes_written;
 
       if (bin_values.data()) { values_buffer = bin_values.data()->data(); }
@@ -655,8 +655,7 @@ class TableWriter::TableWriterImpl : public ArrayVisitor {
   Status Append(const std::string& name, const Array& values) {
     current_column_ = metadata_.AddColumn(name);
     RETURN_NOT_OK(values.Accept(this));
-    current_column_->Finish();
-    return Status::OK();
+    return current_column_->Finish();
   }
 
  private:

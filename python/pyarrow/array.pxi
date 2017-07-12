@@ -19,7 +19,7 @@ from pyarrow.includes.libarrow cimport *
 
 # These are imprecise because the type (in pandas 0.x) depends on the presence
 # of nulls
-_pandas_type_map = {
+cdef dict _pandas_type_map = {
     _Type_NA: np.float64,  # NaNs
     _Type_BOOL: np.bool_,
     _Type_INT8: np.int8,
@@ -39,8 +39,10 @@ _pandas_type_map = {
     _Type_BINARY: np.object_,
     _Type_FIXED_SIZE_BINARY: np.object_,
     _Type_STRING: np.object_,
-    _Type_LIST: np.object_
+    _Type_LIST: np.object_,
+    _Type_DECIMAL: np.object_,
 }
+
 
 cdef class DataType:
 
@@ -51,7 +53,20 @@ cdef class DataType:
         self.sp_type = type
         self.type = type.get()
 
+    property id:
+
+        def __get__(self):
+            return self.type.id()
+
     def __str__(self):
+        if self.type is NULL:
+            raise TypeError(
+                '{} is incomplete. The correct way to construct types is '
+                'through public API functions named '
+                'pyarrow.int64, pyarrow.list_, etc.'.format(
+                    type(self).__name__
+                )
+            )
         return frombytes(self.type.ToString())
 
     def __repr__(self):
@@ -81,6 +96,18 @@ cdef class DictionaryType(DataType):
     cdef void init(self, const shared_ptr[CDataType]& type):
         DataType.init(self, type)
         self.dict_type = <const CDictionaryType*> type.get()
+
+
+cdef class ListType(DataType):
+
+    cdef void init(self, const shared_ptr[CDataType]& type):
+        DataType.init(self, type)
+        self.list_type = <const CListType*> type.get()
+
+    property value_type:
+
+        def __get__(self):
+            return pyarrow_wrap_data_type(self.list_type.value_type())
 
 
 cdef class TimestampType(DataType):
@@ -145,6 +172,16 @@ cdef class DecimalType(FixedSizeBinaryType):
     cdef void init(self, const shared_ptr[CDataType]& type):
         DataType.init(self, type)
         self.decimal_type = <const CDecimalType*> type.get()
+
+    property precision:
+
+        def __get__(self):
+            return self.decimal_type.precision()
+
+    property scale:
+
+        def __get__(self):
+            return self.decimal_type.scale()
 
 
 cdef class Field:
@@ -622,17 +659,47 @@ def binary(int length=-1):
     return pyarrow_wrap_data_type(fixed_size_binary_type)
 
 
-def list_(DataType value_type):
-    cdef DataType out = DataType()
-    cdef shared_ptr[CDataType] list_type
-    list_type.reset(new CListType(value_type.sp_type))
+cpdef ListType list_(value_type):
+    """
+    Create ListType instance from child data type or field
+
+    Parameters
+    ----------
+    value_type : DataType or Field
+
+    Returns
+    -------
+    list_type : DataType
+    """
+    cdef:
+        DataType data_type
+        Field field
+        shared_ptr[CDataType] list_type
+        ListType out = ListType()
+
+    if isinstance(value_type, DataType):
+        list_type.reset(new CListType((<DataType> value_type).sp_type))
+    elif isinstance(value_type, Field):
+        list_type.reset(new CListType((<Field> value_type).sp_field))
+    else:
+        raise ValueError('List requires DataType or Field')
+
     out.init(list_type)
     return out
 
 
-def dictionary(DataType index_type, Array dictionary):
+cpdef DictionaryType dictionary(DataType index_type, Array dictionary):
     """
     Dictionary (categorical, or simply encoded) type
+
+    Parameters
+    ----------
+    index_type : DataType
+    dictionary : Array
+
+    Returns
+    -------
+    type : DictionaryType
     """
     cdef DictionaryType out = DictionaryType()
     cdef shared_ptr[CDataType] dict_type
@@ -644,10 +711,26 @@ def dictionary(DataType index_type, Array dictionary):
 
 def struct(fields):
     """
+    Create StructType instance from fields
 
+    Parameters
+    ----------
+    fields : sequence of Field values
+
+    Examples
+    --------
+    import pyarrow as pa
+    fields = [
+        pa.field('f1', pa.int32()),
+        pa.field('f2', pa.string())
+    ]
+    struct_type = pa.struct(fields)
+
+    Returns
+    -------
+    type : DataType
     """
     cdef:
-        DataType out = DataType()
         Field field
         vector[shared_ptr[CField]] c_fields
         cdef shared_ptr[CDataType] struct_type
@@ -656,8 +739,7 @@ def struct(fields):
         c_fields.push_back(field.sp_field)
 
     struct_type.reset(new CStructType(c_fields))
-    out.init(struct_type)
-    return out
+    return pyarrow_wrap_data_type(struct_type)
 
 
 def schema(fields):

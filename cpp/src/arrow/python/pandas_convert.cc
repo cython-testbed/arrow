@@ -537,9 +537,9 @@ Status PandasConverter::ConvertDates() {
   for (int64_t i = 0; i < length_; ++i) {
     obj = objects[i];
     if (PyDate_CheckExact(obj)) {
-      date_builder.Append(UnboxDate<ArrowType>::Unbox(obj));
+      RETURN_NOT_OK(date_builder.Append(UnboxDate<ArrowType>::Unbox(obj)));
     } else if (PandasObjectIsNull(obj)) {
-      date_builder.AppendNull();
+      RETURN_NOT_OK(date_builder.AppendNull());
     } else {
       return InvalidConversion(obj, "date");
     }
@@ -592,7 +592,7 @@ Status PandasConverter::ConvertDecimals() {
           break;
       }
     } else if (PandasObjectIsNull(object)) {
-      decimal_builder.AppendNull();
+      RETURN_NOT_OK(decimal_builder.AppendNull());
     } else {
       return InvalidConversion(object, "decimal.Decimal");
     }
@@ -893,9 +893,13 @@ Status PandasConverter::ConvertObjects() {
         return ConvertDates<Date32Type>();
       } else if (PyObject_IsInstance(const_cast<PyObject*>(objects[i]), Decimal.obj())) {
         return ConvertDecimals();
+      } else if (PyList_Check(objects[i]) || PyArray_Check(objects[i])) {
+        std::shared_ptr<DataType> inferred_type;
+        RETURN_NOT_OK(InferArrowType(objects[i], &inferred_type));
+        return ConvertLists(inferred_type);
       } else {
-        return InvalidConversion(
-            const_cast<PyObject*>(objects[i]), "string, bool, float, int, date, decimal");
+        return InvalidConversion(const_cast<PyObject*>(objects[i]),
+            "string, bool, float, int, date, decimal, list, array");
       }
     }
   }
@@ -921,8 +925,10 @@ inline Status PandasConverter::ConvertTypedLists(const std::shared_ptr<DataType>
     return Status::NotImplemented("strided arrays not implemented for lists");
   }
 
-  auto value_builder = std::make_shared<BuilderT>(pool_, type);
-  ListBuilder list_builder(pool_, value_builder);
+  ListBuilder list_builder(
+      pool_, std::unique_ptr<ArrayBuilder>(new BuilderT(pool_, type)));
+  BuilderT* value_builder = static_cast<BuilderT*>(list_builder.value_builder());
+
   PyObject** objects = reinterpret_cast<PyObject**>(PyArray_DATA(arr_));
   for (int64_t i = 0; i < length_; ++i) {
     if (PandasObjectIsNull(objects[i])) {
@@ -937,7 +943,7 @@ inline Status PandasConverter::ConvertTypedLists(const std::shared_ptr<DataType>
       int64_t size = PyArray_DIM(numpy_array, 0);
       auto data = reinterpret_cast<const T*>(PyArray_DATA(numpy_array));
       if (traits::supports_nulls) {
-        null_bitmap_->Resize(size, false);
+        RETURN_NOT_OK(null_bitmap_->Resize(size, false));
         // TODO(uwe): A bitmap would be more space-efficient but the Builder API doesn't
         // currently support this.
         // ValuesToBitmap<ITEM_TYPE>(data, size, null_bitmap_->mutable_data());
@@ -957,7 +963,7 @@ inline Status PandasConverter::ConvertTypedLists(const std::shared_ptr<DataType>
         ss << inferred_type->ToString() << " cannot be converted to " << type->ToString();
         return Status::TypeError(ss.str());
       }
-      RETURN_NOT_OK(AppendPySequence(objects[i], type, value_builder, size));
+      RETURN_NOT_OK(AppendPySequence(objects[i], size, type, value_builder));
     } else {
       return Status::TypeError("Unsupported Python type for list items");
     }
@@ -981,8 +987,10 @@ inline Status PandasConverter::ConvertTypedLists<NPY_OBJECT, StringType>(
     return Status::NotImplemented("strided arrays not implemented for lists");
   }
 
-  auto value_builder = std::make_shared<StringBuilder>(pool_);
-  ListBuilder list_builder(pool_, value_builder);
+  ListBuilder list_builder(
+      pool_, std::unique_ptr<ArrayBuilder>(new StringBuilder(pool_)));
+  auto value_builder = static_cast<StringBuilder*>(list_builder.value_builder());
+
   PyObject** objects = reinterpret_cast<PyObject**>(PyArray_DATA(arr_));
   for (int64_t i = 0; i < length_; ++i) {
     if (PandasObjectIsNull(objects[i])) {
@@ -995,7 +1003,7 @@ inline Status PandasConverter::ConvertTypedLists<NPY_OBJECT, StringType>(
       RETURN_NOT_OK(CheckFlatNumpyArray(numpy_array, NPY_OBJECT));
 
       RETURN_NOT_OK(
-          AppendObjectStrings(numpy_array, nullptr, value_builder.get(), &have_bytes));
+          AppendObjectStrings(numpy_array, nullptr, value_builder, &have_bytes));
     } else if (PyList_Check(objects[i])) {
       int64_t size;
       std::shared_ptr<DataType> inferred_type;
@@ -1006,7 +1014,7 @@ inline Status PandasConverter::ConvertTypedLists<NPY_OBJECT, StringType>(
         ss << inferred_type->ToString() << " cannot be converted to STRING.";
         return Status::TypeError(ss.str());
       }
-      RETURN_NOT_OK(AppendPySequence(objects[i], inferred_type, value_builder, size));
+      RETURN_NOT_OK(AppendPySequence(objects[i], size, inferred_type, value_builder));
     } else {
       return Status::TypeError("Unsupported Python type for list items");
     }
@@ -1034,7 +1042,10 @@ Status PandasConverter::ConvertLists(const std::shared_ptr<DataType>& type) {
     LIST_CASE(DOUBLE, NPY_DOUBLE, DoubleType)
     LIST_CASE(STRING, NPY_OBJECT, StringType)
     default:
-      return Status::TypeError("Unknown list item type");
+      std::stringstream ss;
+      ss << "Unknown list item type: ";
+      ss << type->ToString();
+      return Status::TypeError(ss.str());
   }
 
   return Status::TypeError("Unknown list type");
@@ -2419,7 +2430,7 @@ class ArrowDeserializer {
   }
 
   Status Visit(const StructType& type) {
-    AllocateOutput(NPY_OBJECT);
+    RETURN_NOT_OK(AllocateOutput(NPY_OBJECT));
     auto out_values = reinterpret_cast<PyObject**>(PyArray_DATA(arr_));
     return ConvertStruct(data_, out_values);
   }

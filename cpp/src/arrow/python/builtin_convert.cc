@@ -155,14 +155,20 @@ class SeqVisitor {
   // co-recursive with VisitElem
   Status Visit(PyObject* obj, int level = 0) {
     if (level > max_nesting_level_) { max_nesting_level_ = level; }
-
     // Loop through either a sequence or an iterator.
     if (PySequence_Check(obj)) {
       Py_ssize_t size = PySequence_Size(obj);
       for (int64_t i = 0; i < size; ++i) {
-        // TODO(wesm): Specialize for PyList_GET_ITEM?
-        OwnedRef ref = OwnedRef(PySequence_GetItem(obj, i));
-        RETURN_NOT_OK(VisitElem(ref, level));
+        OwnedRef ref;
+        if (PyArray_Check(obj)) {
+          auto array = reinterpret_cast<PyArrayObject*>(obj);
+          auto ptr = reinterpret_cast<const char*>(PyArray_GETPTR1(array, i));
+          ref.reset(PyArray_GETITEM(array, ptr));
+          RETURN_NOT_OK(VisitElem(ref, level));
+        } else {
+          ref.reset(PySequence_GetItem(obj, i));
+          RETURN_NOT_OK(VisitElem(ref, level));
+        }
       }
     } else if (PyObject_HasAttrString(obj, "__iter__")) {
       OwnedRef iter = OwnedRef(PyObject_GetIter(obj));
@@ -280,21 +286,28 @@ Status InferArrowSize(PyObject* obj, int64_t* size) {
 }
 
 // Non-exhaustive type inference
-Status InferArrowTypeAndSize(
-    PyObject* obj, int64_t* size, std::shared_ptr<DataType>* out_type) {
-  RETURN_NOT_OK(InferArrowSize(obj, size));
-
-  // For 0-length sequences, refuse to guess
-  if (*size == 0) { *out_type = null(); }
-
+Status InferArrowType(PyObject* obj, std::shared_ptr<DataType>* out_type) {
   PyDateTime_IMPORT;
   SeqVisitor seq_visitor;
   RETURN_NOT_OK(seq_visitor.Visit(obj));
   RETURN_NOT_OK(seq_visitor.Validate());
 
   *out_type = seq_visitor.GetType();
-
   if (*out_type == nullptr) { return Status::TypeError("Unable to determine data type"); }
+
+  return Status::OK();
+}
+
+Status InferArrowTypeAndSize(
+    PyObject* obj, int64_t* size, std::shared_ptr<DataType>* out_type) {
+  RETURN_NOT_OK(InferArrowSize(obj, size));
+
+  // For 0-length sequences, refuse to guess
+  if (*size == 0) {
+    *out_type = null();
+    return Status::OK();
+  }
+  RETURN_NOT_OK(InferArrowType(obj, out_type));
 
   return Status::OK();
 }
@@ -302,7 +315,7 @@ Status InferArrowTypeAndSize(
 // Marshal Python sequence (list, tuple, etc.) to Arrow array
 class SeqConverter {
  public:
-  virtual Status Init(const std::shared_ptr<ArrayBuilder>& builder) {
+  virtual Status Init(ArrayBuilder* builder) {
     builder_ = builder;
     return Status::OK();
   }
@@ -312,15 +325,15 @@ class SeqConverter {
   virtual ~SeqConverter() {}
 
  protected:
-  std::shared_ptr<ArrayBuilder> builder_;
+  ArrayBuilder* builder_;
 };
 
 template <typename BuilderType>
 class TypedConverter : public SeqConverter {
  public:
-  Status Init(const std::shared_ptr<ArrayBuilder>& builder) override {
+  Status Init(ArrayBuilder* builder) override {
     builder_ = builder;
-    typed_builder_ = static_cast<BuilderType*>(builder.get());
+    typed_builder_ = static_cast<BuilderType*>(builder);
     return Status::OK();
   }
 
@@ -512,13 +525,13 @@ class UTF8Converter : public TypedConverterVisitor<StringBuilder, UTF8Converter>
 
 class ListConverter : public TypedConverterVisitor<ListBuilder, ListConverter> {
  public:
-  Status Init(const std::shared_ptr<ArrayBuilder>& builder) override;
+  Status Init(ArrayBuilder* builder) override;
 
   inline Status AppendItem(const OwnedRef& item) override {
     if (item.obj() == Py_None) {
       return typed_builder_->AppendNull();
     } else {
-      typed_builder_->Append();
+      RETURN_NOT_OK(typed_builder_->Append());
       PyObject* item_obj = item.obj();
       int64_t list_size = static_cast<int64_t>(PySequence_Size(item_obj));
       return value_converter_->AppendData(item_obj, list_size);
@@ -597,9 +610,9 @@ std::shared_ptr<SeqConverter> GetConverter(const std::shared_ptr<DataType>& type
   }
 }
 
-Status ListConverter::Init(const std::shared_ptr<ArrayBuilder>& builder) {
+Status ListConverter::Init(ArrayBuilder* builder) {
   builder_ = builder;
-  typed_builder_ = static_cast<ListBuilder*>(builder.get());
+  typed_builder_ = static_cast<ListBuilder*>(builder);
 
   value_converter_ =
       GetConverter(static_cast<ListType*>(builder->type().get())->value_type());
@@ -607,12 +620,11 @@ Status ListConverter::Init(const std::shared_ptr<ArrayBuilder>& builder) {
     return Status::NotImplemented("value type not implemented");
   }
 
-  value_converter_->Init(typed_builder_->value_builder());
-  return Status::OK();
+  return value_converter_->Init(typed_builder_->value_builder());
 }
 
-Status AppendPySequence(PyObject* obj, const std::shared_ptr<DataType>& type,
-    const std::shared_ptr<ArrayBuilder>& builder, int64_t size) {
+Status AppendPySequence(PyObject* obj, int64_t size,
+    const std::shared_ptr<DataType>& type, ArrayBuilder* builder) {
   PyDateTime_IMPORT;
   std::shared_ptr<SeqConverter> converter = GetConverter(type);
   if (converter == nullptr) {
@@ -620,8 +632,7 @@ Status AppendPySequence(PyObject* obj, const std::shared_ptr<DataType>& type,
     ss << "No type converter implemented for " << type->ToString();
     return Status::NotImplemented(ss.str());
   }
-  converter->Init(builder);
-
+  RETURN_NOT_OK(converter->Init(builder));
   return converter->AppendData(obj, size);
 }
 
@@ -641,9 +652,9 @@ Status ConvertPySequence(PyObject* obj, MemoryPool* pool, std::shared_ptr<Array>
   }
 
   // Give the sequence converter an array builder
-  std::shared_ptr<ArrayBuilder> builder;
+  std::unique_ptr<ArrayBuilder> builder;
   RETURN_NOT_OK(MakeBuilder(pool, type, &builder));
-  RETURN_NOT_OK(AppendPySequence(obj, type, builder, size));
+  RETURN_NOT_OK(AppendPySequence(obj, size, type, builder.get()));
   return builder->Finish(out);
 }
 
