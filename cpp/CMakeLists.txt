@@ -142,6 +142,26 @@ if("${CMAKE_SOURCE_DIR}" STREQUAL "${CMAKE_CURRENT_SOURCE_DIR}")
     "Build with SSE4 optimizations"
     OFF)
 
+  option(ARROW_WITH_BROTLI
+    "Build with Brotli compression"
+    ON)
+
+  option(ARROW_WITH_LZ4
+    "Build with lz4 compression"
+    ON)
+
+  option(ARROW_WITH_SNAPPY
+    "Build with Snappy compression"
+    ON)
+
+  option(ARROW_WITH_ZLIB
+    "Build with zlib compression"
+    ON)
+
+  option(ARROW_WITH_ZSTD
+    "Build with zstd compression"
+    ON)
+
   option(ARROW_ZLIB_VENDORED
     "Build our own zlib (some libz.a aren't configured for static linking)"
     ON)
@@ -159,9 +179,16 @@ if("${CMAKE_SOURCE_DIR}" STREQUAL "${CMAKE_CURRENT_SOURCE_DIR}")
   endif()
 endif()
 
-if(ARROW_BUILD_TESTS)
+if(ARROW_BUILD_TESTS OR ARROW_BUILD_BENCHMARKS)
   set(ARROW_BUILD_STATIC ON)
-else()
+  set(ARROW_WITH_BROTLI ON)
+  set(ARROW_WITH_LZ4 ON)
+  set(ARROW_WITH_SNAPPY ON)
+  set(ARROW_WITH_ZLIB ON)
+  set(ARROW_WITH_ZSTD ON)
+endif()
+
+if(NOT ARROW_BUILD_TESTS)
   set(NO_TESTS 1)
 endif()
 
@@ -531,14 +558,31 @@ endif()
 # Linker and Dependencies
 ############################################################
 
-set(ARROW_STATIC_LINK_LIBS
-  brotli_dec
-  brotli_enc
-  brotli_common
-  snappy
-  zlib
-  zstd_static
-  lz4_static)
+set(ARROW_STATIC_LINK_LIBS)
+
+if (ARROW_WITH_BROTLI)
+  SET(ARROW_STATIC_LINK_LIBS
+    brotli_dec
+    brotli_enc
+    brotli_common
+    ${ARROW_STATIC_LINK_LIBS})
+endif()
+
+if (ARROW_WITH_LZ4)
+  SET(ARROW_STATIC_LINK_LIBS lz4_static ${ARROW_STATIC_LINK_LIBS})
+endif()
+
+if (ARROW_WITH_SNAPPY)
+  SET(ARROW_STATIC_LINK_LIBS snappy ${ARROW_STATIC_LINK_LIBS})
+endif()
+
+if (ARROW_WITH_ZLIB)
+  SET(ARROW_STATIC_LINK_LIBS zlib ${ARROW_STATIC_LINK_LIBS})
+endif()
+
+if (ARROW_WITH_ZSTD)
+  SET(ARROW_STATIC_LINK_LIBS zstd_static ${ARROW_STATIC_LINK_LIBS})
+endif()
 
 add_dependencies(arrow_dependencies ${ARROW_STATIC_LINK_LIBS})
 
@@ -650,7 +694,6 @@ set(ARROW_SRCS
   src/arrow/buffer.cc
   src/arrow/builder.cc
   src/arrow/compare.cc
-  src/arrow/loader.cc
   src/arrow/memory_pool.cc
   src/arrow/pretty_print.cc
   src/arrow/status.cc
@@ -669,6 +712,31 @@ set(ARROW_SRCS
   src/arrow/util/decimal.cc
   src/arrow/util/key_value_metadata.cc
 )
+
+if (ARROW_WITH_BROTLI)
+  add_definitions(-DARROW_WITH_BROTLI)
+  SET(ARROW_SRCS src/arrow/util/compression_brotli.cc ${ARROW_SRCS})
+endif()
+
+if (ARROW_WITH_LZ4)
+  add_definitions(-DARROW_WITH_LZ4)
+  SET(ARROW_SRCS src/arrow/util/compression_lz4.cc ${ARROW_SRCS})
+endif()
+
+if (ARROW_WITH_SNAPPY)
+  add_definitions(-DARROW_WITH_SNAPPY)
+  SET(ARROW_SRCS src/arrow/util/compression_snappy.cc ${ARROW_SRCS})
+endif()
+
+if (ARROW_WITH_ZLIB)
+  add_definitions(-DARROW_WITH_ZLIB)
+  SET(ARROW_SRCS src/arrow/util/compression_zlib.cc ${ARROW_SRCS})
+endif()
+
+if (ARROW_WITH_ZSTD)
+  add_definitions(-DARROW_WITH_ZSTD)
+  SET(ARROW_SRCS src/arrow/util/compression_zstd.cc ${ARROW_SRCS})
+endif()
 
 if (NOT ARROW_BOOST_HEADER_ONLY)
   set(ARROW_SRCS ${ARROW_SRCS}
