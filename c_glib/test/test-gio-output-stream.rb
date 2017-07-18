@@ -15,24 +15,21 @@
 # specific language governing permissions and limitations
 # under the License.
 
-class TestStreamWriter < Test::Unit::TestCase
-  include Helper::Buildable
-
-  def test_write_record_batch
-    tempfile = Tempfile.open("arrow-ipc-stream-writer")
-    output = Arrow::FileOutputStream.new(tempfile.path, false)
+class TestGIOOutputStream < Test::Unit::TestCase
+  def test_writer_backend
+    tempfile = Tempfile.open("arrow-gio-output-stream")
+    file = Gio::File.new_for_path(tempfile.path)
+    output_stream = file.append_to(:none)
+    output = Arrow::GIOOutputStream.new(output_stream)
     begin
       field = Arrow::Field.new("enabled", Arrow::BooleanDataType.new)
       schema = Arrow::Schema.new([field])
-      stream_writer = Arrow::RecordBatchStreamWriter.new(output, schema)
+      file_writer = Arrow::RecordBatchFileWriter.new(output, schema)
       begin
-        columns = [
-          build_boolean_array([true]),
-        ]
-        record_batch = Arrow::RecordBatch.new(schema, 1, columns)
-        stream_writer.write_record_batch(record_batch)
+        record_batch = Arrow::RecordBatch.new(schema, 0, [])
+        file_writer.write_record_batch(record_batch)
       ensure
-        stream_writer.close
+        file_writer.close
       end
     ensure
       output.close
@@ -40,14 +37,17 @@ class TestStreamWriter < Test::Unit::TestCase
 
     input = Arrow::MemoryMappedInputStream.new(tempfile.path)
     begin
-      stream_reader = Arrow::RecordBatchStreamReader.new(input)
+      file_reader = Arrow::RecordBatchFileReader.new(input)
       assert_equal(["enabled"],
-                   stream_reader.schema.fields.collect(&:name))
-      assert_equal(true,
-                   stream_reader.read_next_record_batch.get_column(0).get_value(0))
-      assert_nil(stream_reader.read_next_record_batch)
+                   file_reader.schema.fields.collect(&:name))
     ensure
       input.close
     end
+  end
+
+  def test_getter
+    output_stream = Gio::MemoryOutputStream.new
+    output = Arrow::GIOOutputStream.new(output_stream)
+    assert_equal(output_stream, output.raw)
   end
 end

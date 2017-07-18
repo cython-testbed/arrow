@@ -36,9 +36,14 @@ import pandas.util.testing as tm
 parquet = pytest.mark.parquet
 
 
-def _write_table(*args, **kwargs):
+def _write_table(table, path, **kwargs):
     import pyarrow.parquet as pq
-    return pq.write_table(*args, **kwargs)
+
+    if isinstance(table, pd.DataFrame):
+        table = pa.Table.from_pandas(table)
+
+    pq.write_table(table, path, **kwargs)
+    return table
 
 
 def _read_table(*args, **kwargs):
@@ -453,13 +458,15 @@ def test_date_time_types():
 
     table = pa.Table.from_arrays([a1, a2, a3, a4, a5, a6],
                                  ['date32', 'date64', 'timestamp[us]',
-                                  'time32[s]', 'time64[us]', 'time32_from64[s]'])
+                                  'time32[s]', 'time64[us]',
+                                  'time32_from64[s]'])
 
     # date64 as date32
     # time32[s] to time32[ms]
     expected = pa.Table.from_arrays([a1, a1, a3, a4, a5, ex_a6],
                                     ['date32', 'date64', 'timestamp[us]',
-                                     'time32[s]', 'time64[us]', 'time32_from64[s]'])
+                                     'time32[s]', 'time64[us]',
+                                     'time32_from64[s]'])
 
     _check_roundtrip(table, expected=expected, version='2.0')
 
@@ -847,6 +854,33 @@ def test_read_multiple_files(tmpdir):
 
     with pytest.raises(ValueError):
         read_multiple_files(mixed_paths)
+
+
+@parquet
+def test_ignore_private_directories(tmpdir):
+    import pyarrow.parquet as pq
+
+    nfiles = 10
+    size = 5
+
+    dirpath = tmpdir.join(guid()).strpath
+    os.mkdir(dirpath)
+
+    test_data = []
+    paths = []
+    for i in range(nfiles):
+        df = _test_dataframe(size, seed=i)
+        path = pjoin(dirpath, '{0}.parquet'.format(i))
+
+        test_data.append(_write_table(df, path))
+        paths.append(path)
+
+    # private directory
+    os.mkdir(pjoin(dirpath, '_impala_staging'))
+
+    dataset = pq.ParquetDataset(dirpath)
+    assert set(paths) == set(x.path for x in dataset.pieces)
+
 
 @parquet
 def test_multiindex_duplicate_values(tmpdir):

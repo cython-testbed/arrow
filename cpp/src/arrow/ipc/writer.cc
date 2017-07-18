@@ -110,7 +110,7 @@ class RecordBatchSerializer : public ArrayVisitor {
     }
 
     // push back all common elements
-    field_nodes_.emplace_back(arr.length(), arr.null_count(), 0);
+    field_nodes_.push_back({arr.length(), arr.null_count(), 0});
 
     if (arr.null_count() > 0) {
       std::shared_ptr<Buffer> bitmap;
@@ -566,7 +566,7 @@ Status GetRecordBatchSize(const RecordBatch& batch, int64_t* size) {
   // emulates the behavior of Write without actually writing
   int32_t metadata_length = 0;
   int64_t body_length = 0;
-  MockOutputStream dst;
+  io::MockOutputStream dst;
   RETURN_NOT_OK(WriteRecordBatch(batch, 0, &dst, &metadata_length, &body_length,
       default_memory_pool(), kMaxNestingDepth, true));
   *size = dst.GetExtentBytesWritten();
@@ -577,7 +577,7 @@ Status GetTensorSize(const Tensor& tensor, int64_t* size) {
   // emulates the behavior of Write without actually writing
   int32_t metadata_length = 0;
   int64_t body_length = 0;
-  MockOutputStream dst;
+  io::MockOutputStream dst;
   RETURN_NOT_OK(WriteTensor(tensor, &dst, &metadata_length, &body_length));
   *size = dst.GetExtentBytesWritten();
   return Status::OK();
@@ -680,7 +680,7 @@ class RecordBatchStreamWriter::RecordBatchStreamWriterImpl {
 
   Status WriteRecordBatch(const RecordBatch& batch, bool allow_64bit) {
     // Push an empty FileBlock. Can be written in the footer later
-    record_batches_.emplace_back(0, 0, 0);
+    record_batches_.push_back({0, 0, 0});
     return WriteRecordBatch(
         batch, allow_64bit, &record_batches_[record_batches_.size() - 1]);
   }

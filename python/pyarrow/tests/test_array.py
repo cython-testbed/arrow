@@ -15,6 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
+import datetime
 import pytest
 import sys
 
@@ -142,6 +143,12 @@ def test_array_slice():
         arr[::2]
 
 
+def test_array_factory_invalid_type():
+    arr = np.array([datetime.timedelta(1), datetime.timedelta(2)])
+    with pytest.raises(ValueError):
+        pa.array(arr)
+
+
 def test_dictionary_from_numpy():
     indices = np.repeat([0, 1, 2], 2)
     dictionary = np.array(['foo', 'bar', 'baz'], dtype=object)
@@ -192,6 +199,18 @@ def test_dictionary_with_pandas():
     tm.assert_series_equal(pd.Series(pandas2), pd.Series(ex_pandas2))
 
 
+def test_list_from_arrays():
+    offsets_arr = np.array([0, 2, 5, 8], dtype='i4')
+    offsets = pa.Array.from_pandas(offsets_arr, type=pa.int32())
+    pyvalues = [b'a', b'b', b'c', b'd', b'e', b'f', b'g', b'h']
+    values = pa.array(pyvalues, type=pa.binary())
+
+    result = pa.ListArray.from_arrays(offsets, values)
+    expected = pa.array([pyvalues[:2], pyvalues[2:5], pyvalues[5:8]])
+
+    assert result.equals(expected)
+
+
 def test_simple_type_construction():
     result = pa.lib.TimestampType()
     with pytest.raises(TypeError):
@@ -223,9 +242,9 @@ def test_simple_type_construction():
         (pa.decimal(18, 3), 'decimal'),
         (pa.timestamp('ms'), 'datetime'),
         (pa.timestamp('us', 'UTC'), 'datetimetz'),
-        pytest.mark.xfail((pa.time32('s'), None), raises=NotImplementedError),
-        pytest.mark.xfail((pa.time64('us'), None), raises=NotImplementedError),
-   ]
+        (pa.time32('s'), 'time'),
+        (pa.time64('us'), 'time')
+    ]
 )
 def test_logical_type(type, expected):
     assert get_logical_type(type) == expected

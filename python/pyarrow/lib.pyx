@@ -100,14 +100,26 @@ include "error.pxi"
 # Memory pools and allocation
 include "memory.pxi"
 
+# DataType, Field, Schema
+include "types.pxi"
+
+# Array scalar values
+include "scalar.pxi"
+
 # Array types
 include "array.pxi"
 
 # Column, Table, Record Batch
 include "table.pxi"
 
-# File IO, IPC
+# File IO
 include "io.pxi"
+
+# IPC / Messaging
+include "ipc.pxi"
+
+# Feather format
+include "feather.pxi"
 
 #----------------------------------------------------------------------
 # Public API

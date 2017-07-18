@@ -162,9 +162,6 @@ if("${CMAKE_SOURCE_DIR}" STREQUAL "${CMAKE_CURRENT_SOURCE_DIR}")
     "Build with zstd compression"
     ON)
 
-  option(ARROW_ZLIB_VENDORED
-    "Build our own zlib (some libz.a aren't configured for static linking)"
-    ON)
   if (MSVC)
     set(BROTLI_MSVC_STATIC_LIB_SUFFIX "_static" CACHE STRING
       "Brotli static lib suffix used on Windows with MSVC (default _static)")
@@ -521,25 +518,22 @@ endif (UNIX)
 ############################################################
 # "make format" and "make check-format" targets
 ############################################################
-if (${CLANG_FORMAT_FOUND})
-  # runs clang format and updates files in place.
-  add_custom_target(format ${BUILD_SUPPORT_DIR}/run-clang-format.sh ${CMAKE_CURRENT_SOURCE_DIR} ${CLANG_FORMAT_BIN} 1
-    `find ${CMAKE_CURRENT_SOURCE_DIR}/src -name \\*.cc -or -name \\*.h |
-    sed -e '/_generated/g' |
-    sed -e '/windows_compatibility.h/g' |
-    sed -e '/pyarrow_api.h/g' |
-    sed -e '/config.h/g' |   # python/config.h
-    sed -e '/platform.h/g' |  # python/platform.h
-    sed -e '/ae.h/g' |
-    sed -e '/xxhash.cc/g' |
-    sed -e '/xxhash.h/g'`
-    )
 
-  # runs clang format and exits with a non-zero exit code if any files need to be reformatted
-  add_custom_target(check-format ${BUILD_SUPPORT_DIR}/run-clang-format.sh ${CMAKE_CURRENT_SOURCE_DIR} ${CLANG_FORMAT_BIN} 0
-  `find ${CMAKE_CURRENT_SOURCE_DIR}/src -name \\*.cc -or -name \\*.h | sed -e '/_generated/g'`)
-endif()
+set(CLANG_FORMAT_VERSION 3.9)
 
+# runs clang format and updates files in place.
+add_custom_target(format ${BUILD_SUPPORT_DIR}/run_clang_format.py
+  ${CLANG_FORMAT_VERSION}
+  ${BUILD_SUPPORT_DIR}/clang_format_exclusions.txt
+  ${CMAKE_CURRENT_SOURCE_DIR}/src)
+
+# runs clang format and exits with a non-zero exit code if any files need to be reformatted
+
+# TODO(wesm): Make this work in run_clang_format.py
+# add_custom_target(check-format ${BUILD_SUPPORT_DIR}/run_clang_format.py
+#   ${CLANG_FORMAT_VERSION}
+#   ${BUILD_SUPPORT_DIR}/clang_format_exclusions.txt
+#   ${CMAKE_CURRENT_SOURCE_DIR}/src 1)
 
 ############################################################
 # "make clang-tidy" and "make check-clang-tidy" targets
@@ -584,7 +578,9 @@ if (ARROW_WITH_ZSTD)
   SET(ARROW_STATIC_LINK_LIBS zstd_static ${ARROW_STATIC_LINK_LIBS})
 endif()
 
-add_dependencies(arrow_dependencies ${ARROW_STATIC_LINK_LIBS})
+if (ARROW_STATIC_LINK_LIBS)
+  add_dependencies(arrow_dependencies ${ARROW_STATIC_LINK_LIBS})
+endif()
 
 set(ARROW_MIN_TEST_LIBS
   arrow_static

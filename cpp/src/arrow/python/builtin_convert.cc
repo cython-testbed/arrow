@@ -44,7 +44,8 @@ static inline bool IsPyInteger(PyObject* obj) {
 #endif
 }
 
-Status InvalidConversion(PyObject* obj, const std::string& expected_type_name) {
+Status InvalidConversion(PyObject* obj, const std::string& expected_types,
+    std::ostream* out) {
   OwnedRef type(PyObject_Type(obj));
   RETURN_IF_PYERROR();
   DCHECK_NE(type.obj(), nullptr);
@@ -63,10 +64,10 @@ Status InvalidConversion(PyObject* obj, const std::string& expected_type_name) {
 
   std::string cpp_type_name(bytes, size);
 
-  std::stringstream ss;
-  ss << "Python object of type " << cpp_type_name << " is not None and is not a "
-     << expected_type_name << " object";
-  return Status::Invalid(ss.str());
+  (*out) << "Got Python object of type " << cpp_type_name
+         << " but can only handle these types: "
+         << expected_types;
+  return Status::OK();
 }
 
 class ScalarVisitor {
@@ -82,7 +83,7 @@ class ScalarVisitor {
         binary_count_(0),
         unicode_count_(0) {}
 
-  void Visit(PyObject* obj) {
+  Status Visit(PyObject* obj) {
     ++total_count_;
     if (obj == Py_None) {
       ++none_count_;
@@ -102,7 +103,14 @@ class ScalarVisitor {
       ++unicode_count_;
     } else {
       // TODO(wesm): accumulate error information somewhere
+      static std::string supported_types =
+        "bool, float, integer, date, datetime, bytes, unicode";
+      std::stringstream ss;
+      ss << "Error inferring Arrow data type for collection of Python objects. ";
+      RETURN_NOT_OK(InvalidConversion(obj, supported_types, &ss));
+      return Status::Invalid(ss.str());
     }
+    return Status::OK();
   }
 
   std::shared_ptr<DataType> GetType() {
@@ -255,7 +263,7 @@ class SeqVisitor {
         // TODO
       } else {
         ++nesting_histogram_[level];
-        scalars_.Visit(item_ref.obj());
+        return scalars_.Visit(item_ref.obj());
       }
     }
     return Status::OK();
@@ -462,7 +470,10 @@ class BytesConverter : public TypedConverterVisitor<BinaryBuilder, BytesConverte
     } else if (PyBytes_Check(item.obj())) {
       bytes_obj = item.obj();
     } else {
-      return InvalidConversion(item.obj(), "bytes");
+      std::stringstream ss;
+      ss << "Error converting to Binary type: ";
+      RETURN_NOT_OK(InvalidConversion(item.obj(), "bytes", &ss));
+      return Status::Invalid(ss.str());
     }
     // No error checking
     length = PyBytes_GET_SIZE(bytes_obj);
@@ -477,9 +488,8 @@ class FixedWidthBytesConverter
   inline Status AppendItem(const OwnedRef& item) {
     PyObject* bytes_obj;
     OwnedRef tmp;
-    Py_ssize_t expected_length =
-        std::dynamic_pointer_cast<FixedSizeBinaryType>(typed_builder_->type())
-            ->byte_width();
+    Py_ssize_t expected_length = std::dynamic_pointer_cast<FixedSizeBinaryType>(
+        typed_builder_->type())->byte_width();
     if (item.obj() == Py_None) {
       RETURN_NOT_OK(typed_builder_->AppendNull());
       return Status::OK();
@@ -490,7 +500,10 @@ class FixedWidthBytesConverter
     } else if (PyBytes_Check(item.obj())) {
       bytes_obj = item.obj();
     } else {
-      return InvalidConversion(item.obj(), "bytes");
+      std::stringstream ss;
+      ss << "Error converting to FixedSizeBinary type: ";
+      RETURN_NOT_OK(InvalidConversion(item.obj(), "bytes", &ss));
+      return Status::Invalid(ss.str());
     }
     // No error checking
     RETURN_NOT_OK(CheckPythonBytesAreFixedLength(bytes_obj, expected_length));
