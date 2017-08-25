@@ -110,7 +110,7 @@ python_version_tests() {
   # Other stuff pip install
   pushd $ARROW_PYTHON_DIR
   pip install -r requirements.txt
-  pip install --install-option="--no-cython-compile" https://github.com/cython/cython/archive/19d890ecbf4d47f9114d32af646208187608e583.zip
+  pip install --install-option="--no-cython-compile" https://github.com/cython/cython/archive/release.zip
 
   python setup.py build_ext --with-parquet --with-plasma \
          install --single-version-externally-managed --record=record.text
