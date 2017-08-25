@@ -70,7 +70,7 @@ cdef class Message:
 
     def serialize(self, memory_pool=None):
         """
-        Write message to Buffer with length-prefixed metadata, then body
+        Write message as encapsulated IPC message
 
         Parameters
         ----------
@@ -163,30 +163,37 @@ cdef class _RecordBatchWriter:
         self.closed = True
 
     def __dealloc__(self):
-        if not self.closed:
-            self.close()
+        pass
 
     def _open(self, sink, Schema schema):
-        cdef:
-            shared_ptr[CRecordBatchStreamWriter] writer
-
         get_writer(sink, &self.sink)
 
         with nogil:
             check_status(
                 CRecordBatchStreamWriter.Open(self.sink.get(),
                                               schema.sp_schema,
-                                              &writer))
-
-        self.writer = <shared_ptr[CRecordBatchWriter]> writer
+                                              &self.writer))
         self.closed = False
 
     def write_batch(self, RecordBatch batch):
+        """
+        Write RecordBatch to stream
+
+        Parameters
+        ----------
+        batch : RecordBatch
+        """
         with nogil:
             check_status(self.writer.get()
                          .WriteRecordBatch(deref(batch.batch)))
 
     def close(self):
+        """
+        Close stream and write end-of-stream 0 marker
+        """
+        if self.closed:
+            return
+
         with nogil:
             check_status(self.writer.get().Close())
         self.closed = True
@@ -203,6 +210,7 @@ cdef get_input_stream(object source, shared_ptr[InputStream]* out):
 cdef class _RecordBatchReader:
     cdef:
         shared_ptr[CRecordBatchReader] reader
+        shared_ptr[InputStream] in_stream
 
     cdef readonly:
         Schema schema
@@ -211,16 +219,11 @@ cdef class _RecordBatchReader:
         pass
 
     def _open(self, source):
-        cdef:
-            shared_ptr[InputStream] in_stream
-            shared_ptr[CRecordBatchStreamReader] reader
-
-        get_input_stream(source, &in_stream)
-
+        get_input_stream(source, &self.in_stream)
         with nogil:
-            check_status(CRecordBatchStreamReader.Open(in_stream, &reader))
+            check_status(CRecordBatchStreamReader.Open(
+                self.in_stream.get(), &self.reader))
 
-        self.reader = <shared_ptr[CRecordBatchReader]> reader
         self.schema = Schema()
         self.schema.init_schema(self.reader.get().schema())
 
@@ -273,22 +276,20 @@ cdef class _RecordBatchReader:
 cdef class _RecordBatchFileWriter(_RecordBatchWriter):
 
     def _open(self, sink, Schema schema):
-        cdef shared_ptr[CRecordBatchFileWriter] writer
         get_writer(sink, &self.sink)
 
         with nogil:
             check_status(
                 CRecordBatchFileWriter.Open(self.sink.get(), schema.sp_schema,
-                                      &writer))
+                                            &self.writer))
 
-        # Cast to base class, because has same interface
-        self.writer = <shared_ptr[CRecordBatchWriter]> writer
         self.closed = False
 
 
 cdef class _RecordBatchFileReader:
     cdef:
         shared_ptr[CRecordBatchFileReader] reader
+        shared_ptr[RandomAccessFile] file
 
     cdef readonly:
         Schema schema
@@ -297,8 +298,7 @@ cdef class _RecordBatchFileReader:
         pass
 
     def _open(self, source, footer_offset=None):
-        cdef shared_ptr[RandomAccessFile] reader
-        get_reader(source, &reader)
+        get_reader(source, &self.file)
 
         cdef int64_t offset = 0
         if footer_offset is not None:
@@ -306,10 +306,12 @@ cdef class _RecordBatchFileReader:
 
         with nogil:
             if offset != 0:
-                check_status(CRecordBatchFileReader.Open2(
-                    reader, offset, &self.reader))
+                check_status(
+                    CRecordBatchFileReader.Open2(self.file.get(), offset,
+                                                 &self.reader))
             else:
-                check_status(CRecordBatchFileReader.Open(reader, &self.reader))
+                check_status(
+                    CRecordBatchFileReader.Open(self.file.get(), &self.reader))
 
         self.schema = pyarrow_wrap_schema(self.reader.get().schema())
 
@@ -464,24 +466,57 @@ def read_message(source):
     return result
 
 
-def read_record_batch(Message batch_message, Schema schema):
+def read_schema(obj):
+    """
+    Read Schema from message or buffer
+
+    Parameters
+    ----------
+    obj : buffer or Message
+
+    Returns
+    -------
+    schema : Schema
+    """
+    cdef:
+        shared_ptr[CSchema] result
+        shared_ptr[RandomAccessFile] cpp_file
+
+    if isinstance(obj, Message):
+        raise NotImplementedError(type(obj))
+
+    get_reader(obj, &cpp_file)
+
+    with nogil:
+        check_status(ReadSchema(cpp_file.get(), &result))
+
+    return pyarrow_wrap_schema(result)
+
+
+def read_record_batch(obj, Schema schema):
     """
     Read RecordBatch from message, given a known schema
 
     Parameters
     ----------
-    batch_message : Message
-        Such as that obtained from read_message
+    obj : Message or Buffer-like
     schema : Schema
 
     Returns
     -------
     batch : RecordBatch
     """
-    cdef shared_ptr[CRecordBatch] result
+    cdef:
+        shared_ptr[CRecordBatch] result
+        Message message
+
+    if isinstance(obj, Message):
+        message = obj
+    else:
+        message = read_message(obj)
 
     with nogil:
-        check_status(ReadRecordBatch(deref(batch_message.message.get()),
+        check_status(ReadRecordBatch(deref(message.message.get()),
                                      schema.sp_schema, &result))
 
     return pyarrow_wrap_batch(result)

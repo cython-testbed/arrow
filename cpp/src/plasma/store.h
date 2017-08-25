@@ -19,6 +19,7 @@
 #define PLASMA_STORE_H
 
 #include <deque>
+#include <string>
 #include <vector>
 
 #include "plasma/common.h"
@@ -26,6 +27,8 @@
 #include "plasma/eviction_policy.h"
 #include "plasma/plasma.h"
 #include "plasma/protocol.h"
+
+namespace plasma {
 
 struct GetRequest;
 
@@ -45,9 +48,13 @@ struct Client {
 
 class PlasmaStore {
  public:
-  PlasmaStore(EventLoop* loop, int64_t system_memory);
+  PlasmaStore(EventLoop* loop, int64_t system_memory, std::string directory,
+              bool hugetlbfs_enabled);
 
   ~PlasmaStore();
+
+  /// Get a const pointer to the internal PlasmaStoreInfo object.
+  const PlasmaStoreInfo* get_plasma_store_info();
 
   /// Create a new object. The client must do a call to release_object to tell
   /// the store when it is done with the object.
@@ -64,7 +71,7 @@ class PlasmaStore {
   ///    cannot create the object. In this case, the client should not call
   ///    plasma_release.
   int create_object(const ObjectID& object_id, int64_t data_size, int64_t metadata_size,
-      Client* client, PlasmaObject* result);
+                    Client* client, PlasmaObject* result);
 
   /// Delete objects that have been created in the hash table. This should only
   /// be called on objects that are returned by the eviction policy to evict.
@@ -85,8 +92,8 @@ class PlasmaStore {
   /// @param object_ids Object IDs of the objects to be gotten.
   /// @param timeout_ms The timeout for the get request in milliseconds.
   /// @return Void.
-  void process_get_request(
-      Client* client, const std::vector<ObjectID>& object_ids, int64_t timeout_ms);
+  void process_get_request(Client* client, const std::vector<ObjectID>& object_ids,
+                           int64_t timeout_ms);
 
   /// Seal an object. The object is now immutable and can be accessed with get.
   ///
@@ -125,9 +132,9 @@ class PlasmaStore {
 
   /// Disconnect a client from the PlasmaStore.
   ///
-  /// @param client The client that is disconnected.
+  /// @param client_fd The client file descriptor that is disconnected.
   /// @return Void.
-  void disconnect_client(Client* client);
+  void disconnect_client(int client_fd);
 
   void send_notifications(int client_fd);
 
@@ -164,6 +171,10 @@ class PlasmaStore {
   /// TODO(pcm): Consider putting this into the Client data structure and
   /// reorganize the code slightly.
   std::unordered_map<int, NotificationQueue> pending_notifications_;
+
+  std::unordered_map<int, std::unique_ptr<Client>> connected_clients_;
 };
+
+}  // namespace plasma
 
 #endif  // PLASMA_STORE_H

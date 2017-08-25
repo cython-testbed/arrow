@@ -22,6 +22,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <vector>
 
 #include "arrow/util/macros.h"
 #include "arrow/util/visibility.h"
@@ -42,16 +43,36 @@ struct ObjectType {
   enum type { FILE, DIRECTORY };
 };
 
-class ARROW_EXPORT FileSystemClient {
+struct ARROW_EXPORT FileStatistics {
+  /// Size of file, -1 if finding length is unsupported
+  int64_t size;
+  ObjectType::type kind;
+
+  FileStatistics() {}
+  FileStatistics(int64_t size, ObjectType::type kind) : size(size), kind(kind) {}
+};
+
+class ARROW_EXPORT FileSystem {
  public:
-  virtual ~FileSystemClient() {}
+  virtual ~FileSystem() {}
+
+  virtual Status MakeDirectory(const std::string& path) = 0;
+
+  virtual Status DeleteDirectory(const std::string& path) = 0;
+
+  virtual Status GetChildren(const std::string& path,
+                             std::vector<std::string>* listing) = 0;
+
+  virtual Status Rename(const std::string& src, const std::string& dst) = 0;
+
+  virtual Status Stat(const std::string& path, FileStatistics* stat) = 0;
 };
 
 class ARROW_EXPORT FileInterface {
  public:
   virtual ~FileInterface() = 0;
   virtual Status Close() = 0;
-  virtual Status Tell(int64_t* position) = 0;
+  virtual Status Tell(int64_t* position) const = 0;
 
   FileMode::type mode() const { return mode_; }
 
@@ -73,7 +94,7 @@ class ARROW_EXPORT Writeable {
  public:
   virtual Status Write(const uint8_t* data, int64_t nbytes) = 0;
 
-  // Default implementation is a no-op
+  /// \brief Flush buffered bytes, if any
   virtual Status Flush();
 
   Status Write(const std::string& data);
@@ -107,8 +128,8 @@ class ARROW_EXPORT RandomAccessFile : public InputStream, public Seekable {
   /// be overridden
   ///
   /// Default implementation is thread-safe
-  virtual Status ReadAt(
-      int64_t position, int64_t nbytes, int64_t* bytes_read, uint8_t* out);
+  virtual Status ReadAt(int64_t position, int64_t nbytes, int64_t* bytes_read,
+                        uint8_t* out);
 
   /// Default implementation is thread-safe
   virtual Status ReadAt(int64_t position, int64_t nbytes, std::shared_ptr<Buffer>* out);

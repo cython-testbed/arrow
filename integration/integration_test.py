@@ -789,8 +789,10 @@ class IntegrationRunner(object):
             self._compare_implementations(producer, consumer)
 
     def _compare_implementations(self, producer, consumer):
-        print('-- {0} producing, {1} consuming'.format(producer.name,
+        print('##########################################################')
+        print('{0} producing, {1} consuming'.format(producer.name,
                                                        consumer.name))
+        print('##########################################################')
 
         for json_path in self.json_files:
             print('==========================================================')
@@ -945,7 +947,7 @@ def get_static_json_files():
 
 
 def run_all_tests(debug=False):
-    testers = [CPPTester(debug=debug)]  # , JavaTester(debug=debug)]
+    testers = [CPPTester(debug=debug), JavaTester(debug=debug)]
     static_json_files = get_static_json_files()
     generated_json_files = get_generated_json_files()
     json_files = static_json_files + generated_json_files

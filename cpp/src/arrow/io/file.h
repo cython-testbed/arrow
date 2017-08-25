@@ -40,16 +40,24 @@ class ARROW_EXPORT FileOutputStream : public OutputStream {
  public:
   ~FileOutputStream();
 
-  // When opening a new file, any existing file with the indicated path is
-  // truncated to 0 bytes, deleting any existing memory
+  /// \brief Open a local file for writing, truncating any existing file
+  /// \param[in] path with UTF8 encoding
+  /// \param[out] file a FileOutputStream instance
+  ///
+  /// When opening a new file, any existing file with the indicated path is
+  /// truncated to 0 bytes, deleting any existing memory
   static Status Open(const std::string& path, std::shared_ptr<FileOutputStream>* file);
 
-  static Status Open(
-      const std::string& path, bool append, std::shared_ptr<FileOutputStream>* file);
+  /// \brief Open a local file for writing
+  /// \param[in] path with UTF8 encoding
+  /// \param[in] append append to existing file, otherwise truncate to 0 bytes
+  /// \param[out] file a FileOutputStream instance
+  static Status Open(const std::string& path, bool append,
+                     std::shared_ptr<FileOutputStream>* file);
 
   // OutputStream interface
   Status Close() override;
-  Status Tell(int64_t* position) override;
+  Status Tell(int64_t* position) const override;
 
   // Write bytes to the stream. Thread-safe
   Status Write(const uint8_t* data, int64_t nbytes) override;
@@ -68,15 +76,22 @@ class ARROW_EXPORT ReadableFile : public RandomAccessFile {
  public:
   ~ReadableFile();
 
-  // Open file, allocate memory (if needed) from default memory pool
+  /// \brief Open a local file for reading
+  /// \param[in] path with UTF8 encoding
+  /// \param[out] file ReadableFile instance
+  /// Open file, allocate memory (if needed) from default memory pool
   static Status Open(const std::string& path, std::shared_ptr<ReadableFile>* file);
 
-  // Open file with one's own memory pool for memory allocations
+  /// \brief Open a local file for reading
+  /// \param[in] path with UTF8 encoding
+  /// \param[in] pool a MemoryPool for memory allocations
+  /// \param[out] file ReadableFile instance
+  /// Open file with one's own memory pool for memory allocations
   static Status Open(const std::string& path, MemoryPool* memory_pool,
-      std::shared_ptr<ReadableFile>* file);
+                     std::shared_ptr<ReadableFile>* file);
 
   Status Close() override;
-  Status Tell(int64_t* position) override;
+  Status Tell(int64_t* position) const override;
 
   // Read bytes from the file. Thread-safe
   Status Read(int64_t nbytes, int64_t* bytes_read, uint8_t* buffer) override;
@@ -107,15 +122,15 @@ class ARROW_EXPORT MemoryMappedFile : public ReadWriteFileInterface {
   ~MemoryMappedFile();
 
   /// Create new file with indicated size, return in read/write mode
-  static Status Create(
-      const std::string& path, int64_t size, std::shared_ptr<MemoryMappedFile>* out);
+  static Status Create(const std::string& path, int64_t size,
+                       std::shared_ptr<MemoryMappedFile>* out);
 
   static Status Open(const std::string& path, FileMode::type mode,
-      std::shared_ptr<MemoryMappedFile>* out);
+                     std::shared_ptr<MemoryMappedFile>* out);
 
   Status Close() override;
 
-  Status Tell(int64_t* position) override;
+  Status Tell(int64_t* position) const override;
 
   Status Seek(int64_t position) override;
 

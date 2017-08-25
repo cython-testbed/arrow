@@ -32,13 +32,10 @@ void Status::CopyFrom(const State* state) {
   }
 }
 
-std::ostream& operator<<(std::ostream& os, const Status& x) {
-  os << x.ToString();
-  return os;
-}
-
 std::string Status::CodeAsString() const {
-  if (state_ == NULL) { return "OK"; }
+  if (state_ == NULL) {
+    return "OK";
+  }
 
   const char* type;
   switch (code()) {
@@ -75,7 +72,9 @@ std::string Status::CodeAsString() const {
 
 std::string Status::ToString() const {
   std::string result(CodeAsString());
-  if (state_ == NULL) { return result; }
+  if (state_ == NULL) {
+    return result;
+  }
   result += ": ";
   result += state_->msg;
   return result;

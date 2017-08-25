@@ -68,6 +68,7 @@ from pyarrow.lib import (null, bool_,
                          Date32Value, Date64Value, TimestampValue)
 
 from pyarrow.lib import (HdfsFile, NativeFile, PythonFile,
+                         FixedSizeBufferOutputStream,
                          Buffer, BufferReader, BufferOutputStream,
                          OSFile, MemoryMappedFile, memory_map,
                          frombuffer,
@@ -86,53 +87,51 @@ from pyarrow.lib import (ArrowException,
                          ArrowNotImplementedError,
                          ArrowTypeError)
 
+# Serialization
+from pyarrow.lib import (deserialize_from, deserialize,
+                         serialize, serialize_to, read_serialized,
+                         SerializedPyObject)
 
-from pyarrow.filesystem import Filesystem, HdfsClient, LocalFilesystem
+from pyarrow.filesystem import FileSystem, LocalFileSystem
+
+from pyarrow.hdfs import HadoopFileSystem
+import pyarrow.hdfs as hdfs
 
 from pyarrow.ipc import (Message, MessageReader,
                          RecordBatchFileReader, RecordBatchFileWriter,
                          RecordBatchStreamReader, RecordBatchStreamWriter,
-                         read_message, read_record_batch, read_tensor,
-                         write_tensor,
+                         read_message, read_record_batch, read_schema,
+                         read_tensor, write_tensor,
                          get_record_batch_size, get_tensor_size,
                          open_stream,
                          open_file,
                          serialize_pandas, deserialize_pandas)
 
+localfs = LocalFileSystem.get_instance()
 
-localfs = LocalFilesystem.get_instance()
+# Entry point for starting the plasma store
 
+def _plasma_store_entry_point():
+    """Entry point for starting the plasma store.
+
+    This can be used by invoking e.g.
+    ``plasma_store -s /tmp/plasma -m 1000000000``
+    from the command line and will start the plasma_store executable with the
+    given arguments.
+    """
+    import os
+    import pyarrow
+    import subprocess
+    import sys
+    plasma_store_executable = os.path.join(pyarrow.__path__[0], "plasma_store")
+    process = subprocess.Popen([plasma_store_executable] + sys.argv[1:])
+    process.wait()
 
 # ----------------------------------------------------------------------
-# 0.4.0 deprecations
+# Deprecations
 
-import warnings
+from pyarrow.util import _deprecate_class
 
-def _deprecate_class(old_name, new_name, klass, next_version='0.5.0'):
-    msg = ('pyarrow.{0} has been renamed to '
-           '{1}, will be removed in {2}'
-           .format(old_name, new_name, next_version))
-    def deprecated_factory(*args, **kwargs):
-        warnings.warn(msg, FutureWarning)
-        return klass(*args)
-    return deprecated_factory
-
-FileReader = _deprecate_class('FileReader',
-                              'RecordBatchFileReader',
-                              RecordBatchFileReader, '0.5.0')
-
-FileWriter = _deprecate_class('FileWriter',
-                              'RecordBatchFileWriter',
-                              RecordBatchFileWriter, '0.5.0')
-
-StreamReader = _deprecate_class('StreamReader',
-                                'RecordBatchStreamReader',
-                                RecordBatchStreamReader, '0.5.0')
-
-StreamWriter = _deprecate_class('StreamWriter',
-                                'RecordBatchStreamWriter',
-                                RecordBatchStreamWriter, '0.5.0')
-
-InMemoryOutputStream = _deprecate_class('InMemoryOutputStream',
-                                        'BufferOutputStream',
-                                        BufferOutputStream, '0.5.0')
+# Backwards compatibility with pyarrow < 0.6.0
+HdfsClient = _deprecate_class('HdfsClient', 'pyarrow.hdfs.connect',
+                              hdfs.connect, '0.6.0')

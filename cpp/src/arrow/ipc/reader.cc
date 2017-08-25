@@ -28,12 +28,14 @@
 #include "arrow/io/memory.h"
 #include "arrow/ipc/File_generated.h"
 #include "arrow/ipc/Message_generated.h"
-#include "arrow/ipc/metadata.h"
+#include "arrow/ipc/message.h"
+#include "arrow/ipc/metadata-internal.h"
 #include "arrow/ipc/util.h"
 #include "arrow/status.h"
 #include "arrow/table.h"
 #include "arrow/tensor.h"
 #include "arrow/type.h"
+#include "arrow/util/bit-util.h"
 #include "arrow/util/logging.h"
 #include "arrow/visitor_inline.h"
 
@@ -59,6 +61,9 @@ class IpcComponentSource {
       *out = nullptr;
       return Status::OK();
     } else {
+      DCHECK(BitUtil::IsMultipleOf8(buffer->offset()))
+          << "Buffer " << buffer_index
+          << " did not start on 8-byte aligned offset: " << buffer->offset();
       return file_->ReadAt(buffer->offset(), buffer->length(), out);
     }
   }
@@ -95,12 +100,12 @@ struct ArrayLoaderContext {
 };
 
 static Status LoadArray(const std::shared_ptr<DataType>& type,
-    ArrayLoaderContext* context, internal::ArrayData* out);
+                        ArrayLoaderContext* context, internal::ArrayData* out);
 
 class ArrayLoader {
  public:
   ArrayLoader(const std::shared_ptr<DataType>& type, internal::ArrayData* out,
-      ArrayLoaderContext* context)
+              ArrayLoaderContext* context)
       : type_(type), context_(context), out_(out) {}
 
   Status Load() {
@@ -184,7 +189,7 @@ class ArrayLoader {
   typename std::enable_if<std::is_base_of<FixedWidthType, T>::value &&
                               !std::is_base_of<FixedSizeBinaryType, T>::value &&
                               !std::is_base_of<DictionaryType, T>::value,
-      Status>::type
+                          Status>::type
   Visit(const T& type) {
     return LoadPrimitive<T>();
   }
@@ -252,18 +257,18 @@ class ArrayLoader {
 };
 
 static Status LoadArray(const std::shared_ptr<DataType>& type,
-    ArrayLoaderContext* context, internal::ArrayData* out) {
+                        ArrayLoaderContext* context, internal::ArrayData* out) {
   ArrayLoader loader(type, out, context);
   return loader.Load();
 }
 
 Status ReadRecordBatch(const Buffer& metadata, const std::shared_ptr<Schema>& schema,
-    io::RandomAccessFile* file, std::shared_ptr<RecordBatch>* out) {
+                       io::RandomAccessFile* file, std::shared_ptr<RecordBatch>* out) {
   return ReadRecordBatch(metadata, schema, kMaxNestingDepth, file, out);
 }
 
 Status ReadRecordBatch(const Message& message, const std::shared_ptr<Schema>& schema,
-    std::shared_ptr<RecordBatch>* out) {
+                       std::shared_ptr<RecordBatch>* out) {
   io::BufferReader reader(message.body());
   DCHECK_EQ(message.type(), Message::RECORD_BATCH);
   return ReadRecordBatch(*message.metadata(), schema, kMaxNestingDepth, &reader, out);
@@ -273,8 +278,9 @@ Status ReadRecordBatch(const Message& message, const std::shared_ptr<Schema>& sc
 // Array loading
 
 static Status LoadRecordBatchFromSource(const std::shared_ptr<Schema>& schema,
-    int64_t num_rows, int max_recursion_depth, IpcComponentSource* source,
-    std::shared_ptr<RecordBatch>* out) {
+                                        int64_t num_rows, int max_recursion_depth,
+                                        IpcComponentSource* source,
+                                        std::shared_ptr<RecordBatch>* out) {
   ArrayLoaderContext context;
   context.source = source;
   context.field_index = 0;
@@ -294,16 +300,17 @@ static Status LoadRecordBatchFromSource(const std::shared_ptr<Schema>& schema,
 }
 
 static inline Status ReadRecordBatch(const flatbuf::RecordBatch* metadata,
-    const std::shared_ptr<Schema>& schema, int max_recursion_depth,
-    io::RandomAccessFile* file, std::shared_ptr<RecordBatch>* out) {
+                                     const std::shared_ptr<Schema>& schema,
+                                     int max_recursion_depth, io::RandomAccessFile* file,
+                                     std::shared_ptr<RecordBatch>* out) {
   IpcComponentSource source(metadata, file);
-  return LoadRecordBatchFromSource(
-      schema, metadata->length(), max_recursion_depth, &source, out);
+  return LoadRecordBatchFromSource(schema, metadata->length(), max_recursion_depth,
+                                   &source, out);
 }
 
 Status ReadRecordBatch(const Buffer& metadata, const std::shared_ptr<Schema>& schema,
-    int max_recursion_depth, io::RandomAccessFile* file,
-    std::shared_ptr<RecordBatch>* out) {
+                       int max_recursion_depth, io::RandomAccessFile* file,
+                       std::shared_ptr<RecordBatch>* out) {
   auto message = flatbuf::GetMessage(metadata.data());
   if (message->header_type() != flatbuf::MessageHeader_RecordBatch) {
     DCHECK_EQ(message->header_type(), flatbuf::MessageHeader_RecordBatch);
@@ -313,7 +320,8 @@ Status ReadRecordBatch(const Buffer& metadata, const std::shared_ptr<Schema>& sc
 }
 
 Status ReadDictionary(const Buffer& metadata, const DictionaryTypeMap& dictionary_types,
-    io::RandomAccessFile* file, int64_t* dictionary_id, std::shared_ptr<Array>* out) {
+                      io::RandomAccessFile* file, int64_t* dictionary_id,
+                      std::shared_ptr<Array>* out) {
   auto message = flatbuf::GetMessage(metadata.data());
   auto dictionary_batch =
       reinterpret_cast<const flatbuf::DictionaryBatch*>(message->header());
@@ -347,7 +355,7 @@ Status ReadDictionary(const Buffer& metadata, const DictionaryTypeMap& dictionar
 }
 
 static Status ReadMessageAndValidate(MessageReader* reader, Message::Type expected_type,
-    bool allow_null, std::unique_ptr<Message>* message) {
+                                     bool allow_null, std::unique_ptr<Message>* message) {
   RETURN_NOT_OK(reader->ReadNextMessage(message));
 
   if (!(*message) && !allow_null) {
@@ -357,7 +365,9 @@ static Status ReadMessageAndValidate(MessageReader* reader, Message::Type expect
     return Status::Invalid(ss.str());
   }
 
-  if ((*message) == nullptr) { return Status::OK(); }
+  if ((*message) == nullptr) {
+    return Status::OK();
+  }
 
   if ((*message)->type() != expected_type) {
     std::stringstream ss;
@@ -389,15 +399,15 @@ class RecordBatchStreamReader::RecordBatchStreamReaderImpl {
 
   Status ReadNextDictionary() {
     std::unique_ptr<Message> message;
-    RETURN_NOT_OK(ReadMessageAndValidate(
-        message_reader_.get(), Message::DICTIONARY_BATCH, false, &message));
+    RETURN_NOT_OK(ReadMessageAndValidate(message_reader_.get(), Message::DICTIONARY_BATCH,
+                                         false, &message));
 
     io::BufferReader reader(message->body());
 
     std::shared_ptr<Array> dictionary;
     int64_t id;
-    RETURN_NOT_OK(ReadDictionary(
-        *message->metadata(), dictionary_types_, &reader, &id, &dictionary));
+    RETURN_NOT_OK(ReadDictionary(*message->metadata(), dictionary_types_, &reader, &id,
+                                 &dictionary));
     return dictionary_memo_.AddDictionary(id, dictionary);
   }
 
@@ -420,8 +430,8 @@ class RecordBatchStreamReader::RecordBatchStreamReaderImpl {
 
   Status ReadNextRecordBatch(std::shared_ptr<RecordBatch>* batch) {
     std::unique_ptr<Message> message;
-    RETURN_NOT_OK(ReadMessageAndValidate(
-        message_reader_.get(), Message::RECORD_BATCH, true, &message));
+    RETURN_NOT_OK(ReadMessageAndValidate(message_reader_.get(), Message::RECORD_BATCH,
+                                         true, &message));
 
     if (message == nullptr) {
       // End of stream
@@ -451,17 +461,40 @@ RecordBatchStreamReader::RecordBatchStreamReader() {
 RecordBatchStreamReader::~RecordBatchStreamReader() {}
 
 Status RecordBatchStreamReader::Open(std::unique_ptr<MessageReader> message_reader,
-    std::shared_ptr<RecordBatchStreamReader>* reader) {
+                                     std::shared_ptr<RecordBatchReader>* reader) {
+  // Private ctor
+  auto result = std::shared_ptr<RecordBatchStreamReader>(new RecordBatchStreamReader());
+  RETURN_NOT_OK(result->impl_->Open(std::move(message_reader)));
+  *reader = result;
+  return Status::OK();
+}
+
+Status RecordBatchStreamReader::Open(io::InputStream* stream,
+                                     std::shared_ptr<RecordBatchReader>* out) {
+  std::unique_ptr<MessageReader> message_reader(new InputStreamMessageReader(stream));
+  return Open(std::move(message_reader), out);
+}
+
+Status RecordBatchStreamReader::Open(const std::shared_ptr<io::InputStream>& stream,
+                                     std::shared_ptr<RecordBatchReader>* out) {
+  std::unique_ptr<MessageReader> message_reader(new InputStreamMessageReader(stream));
+  return Open(std::move(message_reader), out);
+}
+
+#ifndef ARROW_NO_DEPRECATED_API
+Status RecordBatchStreamReader::Open(std::unique_ptr<MessageReader> message_reader,
+                                     std::shared_ptr<RecordBatchStreamReader>* reader) {
   // Private ctor
   *reader = std::shared_ptr<RecordBatchStreamReader>(new RecordBatchStreamReader());
   return (*reader)->impl_->Open(std::move(message_reader));
 }
 
 Status RecordBatchStreamReader::Open(const std::shared_ptr<io::InputStream>& stream,
-    std::shared_ptr<RecordBatchStreamReader>* out) {
+                                     std::shared_ptr<RecordBatchStreamReader>* out) {
   std::unique_ptr<MessageReader> message_reader(new InputStreamMessageReader(stream));
   return Open(std::move(message_reader), out);
 }
+#endif
 
 std::shared_ptr<Schema> RecordBatchStreamReader::schema() const {
   return impl_->schema();
@@ -502,8 +535,8 @@ class RecordBatchFileReader::RecordBatchFileReaderImpl {
     }
 
     // Now read the footer
-    RETURN_NOT_OK(file_->ReadAt(
-        footer_offset_ - footer_length - file_end_size, footer_length, &footer_buffer_));
+    RETURN_NOT_OK(file_->ReadAt(footer_offset_ - footer_length - file_end_size,
+                                footer_length, &footer_buffer_));
 
     // TODO(wesm): Verify the footer
     footer_ = flatbuf::GetFooter(footer_buffer_->data());
@@ -545,9 +578,12 @@ class RecordBatchFileReader::RecordBatchFileReaderImpl {
     DCHECK_LT(i, num_record_batches());
     FileBlock block = record_batch(i);
 
+    DCHECK(BitUtil::IsMultipleOf8(block.offset));
+    DCHECK(BitUtil::IsMultipleOf8(block.metadata_length));
+    DCHECK(BitUtil::IsMultipleOf8(block.body_length));
+
     std::unique_ptr<Message> message;
-    RETURN_NOT_OK(
-        ReadMessage(block.offset, block.metadata_length, file_.get(), &message));
+    RETURN_NOT_OK(ReadMessage(block.offset, block.metadata_length, file_, &message));
 
     io::BufferReader reader(message->body());
     return ::arrow::ipc::ReadRecordBatch(*message->metadata(), schema_, &reader, batch);
@@ -559,16 +595,20 @@ class RecordBatchFileReader::RecordBatchFileReaderImpl {
     // Read all the dictionaries
     for (int i = 0; i < num_dictionaries(); ++i) {
       FileBlock block = dictionary(i);
+
+      DCHECK(BitUtil::IsMultipleOf8(block.offset));
+      DCHECK(BitUtil::IsMultipleOf8(block.metadata_length));
+      DCHECK(BitUtil::IsMultipleOf8(block.body_length));
+
       std::unique_ptr<Message> message;
-      RETURN_NOT_OK(
-          ReadMessage(block.offset, block.metadata_length, file_.get(), &message));
+      RETURN_NOT_OK(ReadMessage(block.offset, block.metadata_length, file_, &message));
 
       io::BufferReader reader(message->body());
 
       std::shared_ptr<Array> dictionary;
       int64_t dictionary_id;
       RETURN_NOT_OK(ReadDictionary(*message->metadata(), dictionary_fields_, &reader,
-          &dictionary_id, &dictionary));
+                                   &dictionary_id, &dictionary));
       RETURN_NOT_OK(dictionary_memo_->AddDictionary(dictionary_id, dictionary));
     }
 
@@ -577,6 +617,11 @@ class RecordBatchFileReader::RecordBatchFileReaderImpl {
   }
 
   Status Open(const std::shared_ptr<io::RandomAccessFile>& file, int64_t footer_offset) {
+    owned_file_ = file;
+    return Open(file.get(), footer_offset);
+  }
+
+  Status Open(io::RandomAccessFile* file, int64_t footer_offset) {
     file_ = file;
     footer_offset_ = footer_offset;
     RETURN_NOT_OK(ReadFooter());
@@ -586,7 +631,10 @@ class RecordBatchFileReader::RecordBatchFileReaderImpl {
   std::shared_ptr<Schema> schema() const { return schema_; }
 
  private:
-  std::shared_ptr<io::RandomAccessFile> file_;
+  io::RandomAccessFile* file_;
+
+  // Deprecated as of 0.7.0
+  std::shared_ptr<io::RandomAccessFile> owned_file_;
 
   // The location where the Arrow file layout ends. May be the end of the file
   // or some other location if embedded in a larger file.
@@ -609,63 +657,86 @@ RecordBatchFileReader::RecordBatchFileReader() {
 
 RecordBatchFileReader::~RecordBatchFileReader() {}
 
+Status RecordBatchFileReader::Open(io::RandomAccessFile* file,
+                                   std::shared_ptr<RecordBatchFileReader>* reader) {
+  int64_t footer_offset;
+  RETURN_NOT_OK(file->GetSize(&footer_offset));
+  return Open(file, footer_offset, reader);
+}
+
+Status RecordBatchFileReader::Open(io::RandomAccessFile* file, int64_t footer_offset,
+                                   std::shared_ptr<RecordBatchFileReader>* reader) {
+  *reader = std::shared_ptr<RecordBatchFileReader>(new RecordBatchFileReader());
+  return (*reader)->impl_->Open(file, footer_offset);
+}
+
 Status RecordBatchFileReader::Open(const std::shared_ptr<io::RandomAccessFile>& file,
-    std::shared_ptr<RecordBatchFileReader>* reader) {
+                                   std::shared_ptr<RecordBatchFileReader>* reader) {
   int64_t footer_offset;
   RETURN_NOT_OK(file->GetSize(&footer_offset));
   return Open(file, footer_offset, reader);
 }
 
 Status RecordBatchFileReader::Open(const std::shared_ptr<io::RandomAccessFile>& file,
-    int64_t footer_offset, std::shared_ptr<RecordBatchFileReader>* reader) {
+                                   int64_t footer_offset,
+                                   std::shared_ptr<RecordBatchFileReader>* reader) {
   *reader = std::shared_ptr<RecordBatchFileReader>(new RecordBatchFileReader());
   return (*reader)->impl_->Open(file, footer_offset);
 }
 
-std::shared_ptr<Schema> RecordBatchFileReader::schema() const {
-  return impl_->schema();
-}
+std::shared_ptr<Schema> RecordBatchFileReader::schema() const { return impl_->schema(); }
 
 int RecordBatchFileReader::num_record_batches() const {
   return impl_->num_record_batches();
 }
 
-MetadataVersion RecordBatchFileReader::version() const {
-  return impl_->version();
-}
+MetadataVersion RecordBatchFileReader::version() const { return impl_->version(); }
 
-Status RecordBatchFileReader::ReadRecordBatch(
-    int i, std::shared_ptr<RecordBatch>* batch) {
+Status RecordBatchFileReader::ReadRecordBatch(int i,
+                                              std::shared_ptr<RecordBatch>* batch) {
   return impl_->ReadRecordBatch(i, batch);
 }
 
-static Status ReadContiguousPayload(
-    int64_t offset, io::RandomAccessFile* file, std::unique_ptr<Message>* message) {
-  std::shared_ptr<Buffer> buffer;
-  RETURN_NOT_OK(file->Seek(offset));
+static Status ReadContiguousPayload(io::InputStream* file,
+                                    std::unique_ptr<Message>* message) {
   RETURN_NOT_OK(ReadMessage(file, message));
-
   if (*message == nullptr) {
     return Status::Invalid("Unable to read metadata at offset");
   }
   return Status::OK();
 }
 
-Status ReadRecordBatch(const std::shared_ptr<Schema>& schema, int64_t offset,
-    io::RandomAccessFile* file, std::shared_ptr<RecordBatch>* out) {
-  std::unique_ptr<Message> message;
-  RETURN_NOT_OK(ReadContiguousPayload(offset, file, &message));
-  io::BufferReader buffer_reader(message->body());
-  return ReadRecordBatch(
-      *message->metadata(), schema, kMaxNestingDepth, &buffer_reader, out);
+Status ReadSchema(io::InputStream* stream, std::shared_ptr<Schema>* out) {
+  std::shared_ptr<RecordBatchReader> reader;
+  RETURN_NOT_OK(RecordBatchStreamReader::Open(stream, &reader));
+  *out = reader->schema();
+  return Status::OK();
 }
 
-Status ReadTensor(
-    int64_t offset, io::RandomAccessFile* file, std::shared_ptr<Tensor>* out) {
+Status ReadRecordBatch(const std::shared_ptr<Schema>& schema, io::InputStream* file,
+                       std::shared_ptr<RecordBatch>* out) {
+  std::unique_ptr<Message> message;
+  RETURN_NOT_OK(ReadContiguousPayload(file, &message));
+  io::BufferReader buffer_reader(message->body());
+  return ReadRecordBatch(*message->metadata(), schema, kMaxNestingDepth, &buffer_reader,
+                         out);
+}
+
+// Deprecated
+Status ReadRecordBatch(const std::shared_ptr<Schema>& schema, int64_t offset,
+                       io::RandomAccessFile* file, std::shared_ptr<RecordBatch>* out) {
+  RETURN_NOT_OK(file->Seek(offset));
+  return ReadRecordBatch(schema, file, out);
+}
+
+Status ReadTensor(int64_t offset, io::RandomAccessFile* file,
+                  std::shared_ptr<Tensor>* out) {
   // Respect alignment of Tensor messages (see WriteTensor)
   offset = PaddedLength(offset);
+  RETURN_NOT_OK(file->Seek(offset));
+
   std::unique_ptr<Message> message;
-  RETURN_NOT_OK(ReadContiguousPayload(offset, file, &message));
+  RETURN_NOT_OK(ReadContiguousPayload(file, &message));
 
   std::shared_ptr<DataType> type;
   std::vector<int64_t> shape;

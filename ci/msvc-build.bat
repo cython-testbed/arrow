@@ -52,8 +52,12 @@ conda create -n arrow -q -y python=%PYTHON% ^
       thrift-cpp
 
 if "%JOB%" == "Toolchain" (
+
   conda install -n arrow -q -y -c conda-forge ^
-      flatbuffers rapidjson cmake git boost-cpp ^
+      flatbuffers rapidjson ^
+      cmake ^
+      git ^
+      boost-cpp ^
       snappy zlib brotli gflags lz4-c zstd
 )
 
@@ -97,7 +101,6 @@ cmake -G "%GENERATOR%" ^
      -DCMAKE_INSTALL_PREFIX=%PARQUET_HOME% ^
      -DCMAKE_BUILD_TYPE=%CONFIGURATION% ^
      -DPARQUET_BOOST_USE_SHARED=OFF ^
-     -DPARQUET_ZLIB_VENDORED=off ^
      -DPARQUET_BUILD_TESTS=off .. || exit /B
 cmake --build . --target INSTALL --config %CONFIGURATION% || exit /B
 popd
@@ -107,6 +110,9 @@ popd
 @rem see PARQUET-1018
 
 pushd python
+
+set PYARROW_CXXFLAGS=/WX
 python setup.py build_ext --inplace --with-parquet --bundle-arrow-cpp bdist_wheel  || exit /B
 py.test pyarrow -v -s --parquet || exit /B
+
 popd

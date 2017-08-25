@@ -29,6 +29,7 @@
 #include "arrow/io/memory.h"
 #include "arrow/io/test-common.h"
 #include "arrow/ipc/api.h"
+#include "arrow/ipc/metadata-internal.h"
 #include "arrow/ipc/test-common.h"
 #include "arrow/ipc/util.h"
 #include "arrow/memory_pool.h"
@@ -47,21 +48,14 @@ class TestSchemaMetadata : public ::testing::Test {
  public:
   void SetUp() {}
 
-  void CheckRoundtrip(const Schema& schema, DictionaryMemo* memo) {
+  void CheckRoundtrip(const Schema& schema) {
     std::shared_ptr<Buffer> buffer;
-    ASSERT_OK(WriteSchemaMessage(schema, memo, &buffer));
+    ASSERT_OK(SerializeSchema(schema, default_memory_pool(), &buffer));
 
-    std::unique_ptr<Message> message;
-    ASSERT_OK(Message::Open(buffer, nullptr, &message));
-
-    ASSERT_EQ(Message::SCHEMA, message->type());
-
-    DictionaryMemo empty_memo;
-
-    std::shared_ptr<Schema> schema2;
-    ASSERT_OK(GetSchema(message->header(), empty_memo, &schema2));
-
-    AssertSchemaEqual(schema, *schema2);
+    std::shared_ptr<Schema> result;
+    io::BufferReader reader(buffer);
+    ASSERT_OK(ReadSchema(&reader, &result));
+    AssertSchemaEqual(schema, *result);
   }
 };
 
@@ -107,9 +101,7 @@ TEST_F(TestSchemaMetadata, PrimitiveFields) {
   auto f10 = field("f10", std::make_shared<BooleanType>());
 
   Schema schema({f0, f1, f2, f3, f4, f5, f6, f7, f8, f9, f10});
-  DictionaryMemo memo;
-
-  CheckRoundtrip(schema, &memo);
+  CheckRoundtrip(schema);
 }
 
 TEST_F(TestSchemaMetadata, NestedFields) {
@@ -121,48 +113,45 @@ TEST_F(TestSchemaMetadata, NestedFields) {
   auto f1 = field("f1", type2);
 
   Schema schema({f0, f1});
-  DictionaryMemo memo;
-
-  CheckRoundtrip(schema, &memo);
+  CheckRoundtrip(schema);
 }
 
-#define BATCH_CASES()                                                                    \
-  ::testing::Values(&MakeIntRecordBatch, &MakeListRecordBatch, &MakeNonNullRecordBatch,  \
-      &MakeZeroLengthRecordBatch, &MakeDeeplyNestedList, &MakeStringTypesRecordBatch,    \
-      &MakeStruct, &MakeUnion, &MakeDictionary, &MakeDates, &MakeTimestamps, &MakeTimes, \
-      &MakeFWBinary, &MakeBooleanBatch);
+#define BATCH_CASES()                                                                   \
+  ::testing::Values(&MakeIntRecordBatch, &MakeListRecordBatch, &MakeNonNullRecordBatch, \
+                    &MakeZeroLengthRecordBatch, &MakeDeeplyNestedList,                  \
+                    &MakeStringTypesRecordBatch, &MakeStruct, &MakeUnion,               \
+                    &MakeDictionary, &MakeDates, &MakeTimestamps, &MakeTimes,           \
+                    &MakeFWBinary, &MakeBooleanBatch);
 
 static int g_file_number = 0;
 
 class IpcTestFixture : public io::MemoryMapFixture {
  public:
-  Status DoStandardRoundTrip(const RecordBatch& batch, bool zero_data,
-      std::shared_ptr<RecordBatch>* batch_result) {
-    int32_t metadata_length;
-    int64_t body_length;
+  Status DoSchemaRoundTrip(const Schema& schema, std::shared_ptr<Schema>* result) {
+    std::shared_ptr<Buffer> serialized_schema;
+    RETURN_NOT_OK(SerializeSchema(schema, pool_, &serialized_schema));
 
-    const int64_t buffer_offset = 0;
-
-    if (zero_data) { RETURN_NOT_OK(ZeroMemoryMap(mmap_.get())); }
-    RETURN_NOT_OK(mmap_->Seek(0));
-
-    RETURN_NOT_OK(WriteRecordBatch(
-        batch, buffer_offset, mmap_.get(), &metadata_length, &body_length, pool_));
-
-    std::unique_ptr<Message> message;
-    RETURN_NOT_OK(ReadMessage(0, metadata_length, mmap_.get(), &message));
-
-    io::BufferReader buffer_reader(message->body());
-    return ReadRecordBatch(
-        *message->metadata(), batch.schema(), &buffer_reader, batch_result);
+    io::BufferReader buf_reader(serialized_schema);
+    return ReadSchema(&buf_reader, result);
   }
 
-  Status DoLargeRoundTrip(
-      const RecordBatch& batch, bool zero_data, std::shared_ptr<RecordBatch>* result) {
-    if (zero_data) { RETURN_NOT_OK(ZeroMemoryMap(mmap_.get())); }
+  Status DoStandardRoundTrip(const RecordBatch& batch,
+                             std::shared_ptr<RecordBatch>* batch_result) {
+    std::shared_ptr<Buffer> serialized_batch;
+    RETURN_NOT_OK(SerializeRecordBatch(batch, pool_, &serialized_batch));
+
+    io::BufferReader buf_reader(serialized_batch);
+    return ReadRecordBatch(batch.schema(), &buf_reader, batch_result);
+  }
+
+  Status DoLargeRoundTrip(const RecordBatch& batch, bool zero_data,
+                          std::shared_ptr<RecordBatch>* result) {
+    if (zero_data) {
+      RETURN_NOT_OK(ZeroMemoryMap(mmap_.get()));
+    }
     RETURN_NOT_OK(mmap_->Seek(0));
 
-    std::shared_ptr<RecordBatchFileWriter> file_writer;
+    std::shared_ptr<RecordBatchWriter> file_writer;
     RETURN_NOT_OK(RecordBatchFileWriter::Open(mmap_.get(), batch.schema(), &file_writer));
     RETURN_NOT_OK(file_writer->WriteRecordBatch(batch, true));
     RETURN_NOT_OK(file_writer->Close());
@@ -171,7 +160,7 @@ class IpcTestFixture : public io::MemoryMapFixture {
     RETURN_NOT_OK(mmap_->Tell(&offset));
 
     std::shared_ptr<RecordBatchFileReader> file_reader;
-    RETURN_NOT_OK(RecordBatchFileReader::Open(mmap_, offset, &file_reader));
+    RETURN_NOT_OK(RecordBatchFileReader::Open(mmap_.get(), offset, &file_reader));
 
     return file_reader->ReadRecordBatch(0, result);
   }
@@ -191,8 +180,12 @@ class IpcTestFixture : public io::MemoryMapFixture {
     ss << "test-write-row-batch-" << g_file_number++;
     ASSERT_OK(io::MemoryMapFixture::InitMemoryMap(buffer_size, ss.str(), &mmap_));
 
+    std::shared_ptr<Schema> schema_result;
+    ASSERT_OK(DoSchemaRoundTrip(*batch.schema(), &schema_result));
+    ASSERT_TRUE(batch.schema()->Equals(*schema_result));
+
     std::shared_ptr<RecordBatch> result;
-    ASSERT_OK(DoStandardRoundTrip(batch, true, &result));
+    ASSERT_OK(DoStandardRoundTrip(batch, &result));
     CheckReadResult(*result, batch);
 
     ASSERT_OK(DoLargeRoundTrip(batch, true, &result));
@@ -244,8 +237,8 @@ TEST_F(TestIpcRoundTrip, MetadataVersion) {
 
   const int64_t buffer_offset = 0;
 
-  ASSERT_OK(WriteRecordBatch(
-      *batch, buffer_offset, mmap_.get(), &metadata_length, &body_length, pool_));
+  ASSERT_OK(WriteRecordBatch(*batch, buffer_offset, mmap_.get(), &metadata_length,
+                             &body_length, pool_));
 
   std::unique_ptr<Message> message;
   ASSERT_OK(ReadMessage(0, metadata_length, mmap_.get(), &message));
@@ -258,7 +251,9 @@ TEST_P(TestIpcRoundTrip, SliceRoundTrip) {
   ASSERT_OK((*GetParam())(&batch));  // NOLINT clang-tidy gtest issue
 
   // Skip the zero-length case
-  if (batch->num_rows() < 2) { return; }
+  if (batch->num_rows() < 2) {
+    return;
+  }
 
   auto sliced_batch = batch->Slice(2, 10);
   CheckRoundtrip(*sliced_batch, 1 << 20);
@@ -282,8 +277,9 @@ TEST_P(TestIpcRoundTrip, ZeroLengthArrays) {
   ASSERT_OK(AllocateBuffer(pool_, sizeof(int32_t), &value_offsets));
   *reinterpret_cast<int32_t*>(value_offsets->mutable_data()) = 0;
 
-  std::shared_ptr<Array> bin_array = std::make_shared<BinaryArray>(0, value_offsets,
-      std::make_shared<Buffer>(nullptr, 0), std::make_shared<Buffer>(nullptr, 0));
+  std::shared_ptr<Array> bin_array = std::make_shared<BinaryArray>(
+      0, value_offsets, std::make_shared<Buffer>(nullptr, 0),
+      std::make_shared<Buffer>(nullptr, 0));
 
   // null value_offsets
   std::shared_ptr<Array> bin_array2 = std::make_shared<BinaryArray>(0, nullptr, nullptr);
@@ -295,7 +291,7 @@ TEST_P(TestIpcRoundTrip, ZeroLengthArrays) {
 TEST_F(TestWriteRecordBatch, SliceTruncatesBuffers) {
   auto CheckArray = [this](const std::shared_ptr<Array>& array) {
     auto f0 = field("f0", array->type());
-    auto schema = std::shared_ptr<Schema>(new Schema({f0}));
+    auto schema = ::arrow::schema({f0});
     RecordBatch batch(schema, array->length(), {array});
     auto sliced_batch = batch.Slice(0, 5);
 
@@ -357,8 +353,8 @@ TEST_F(TestWriteRecordBatch, SliceTruncatesBuffers) {
   std::shared_ptr<Buffer> offsets_buffer;
   ASSERT_OK(
       test::CopyBufferFromVector(type_offsets, default_memory_pool(), &offsets_buffer));
-  a1 = std::make_shared<UnionArray>(
-      dense_union_type, a0->length(), struct_children, ids_buffer, offsets_buffer);
+  a1 = std::make_shared<UnionArray>(dense_union_type, a0->length(), struct_children,
+                                    ids_buffer, offsets_buffer);
   CheckArray(a1);
 }
 
@@ -367,8 +363,8 @@ void TestGetRecordBatchSize(std::shared_ptr<RecordBatch> batch) {
   int32_t mock_metadata_length = -1;
   int64_t mock_body_length = -1;
   int64_t size = -1;
-  ASSERT_OK(WriteRecordBatch(
-      *batch, 0, &mock, &mock_metadata_length, &mock_body_length, default_memory_pool()));
+  ASSERT_OK(WriteRecordBatch(*batch, 0, &mock, &mock_metadata_length, &mock_body_length,
+                             default_memory_pool()));
   ASSERT_OK(GetRecordBatchSize(*batch, &size));
   ASSERT_EQ(mock.GetExtentBytesWritten(), size);
 }
@@ -398,10 +394,10 @@ class RecursionLimits : public ::testing::Test, public io::MemoryMapFixture {
   void TearDown() { io::MemoryMapFixture::TearDown(); }
 
   Status WriteToMmap(int recursion_level, bool override_level, int32_t* metadata_length,
-      int64_t* body_length, std::shared_ptr<RecordBatch>* batch,
-      std::shared_ptr<Schema>* schema) {
+                     int64_t* body_length, std::shared_ptr<RecordBatch>* batch,
+                     std::shared_ptr<Schema>* schema) {
     const int batch_length = 5;
-    TypePtr type = int32();
+    auto type = int32();
     std::shared_ptr<Array> array;
     const bool include_nulls = true;
     RETURN_NOT_OK(MakeRandomInt32Array(1000, include_nulls, pool_, &array));
@@ -413,7 +409,7 @@ class RecursionLimits : public ::testing::Test, public io::MemoryMapFixture {
 
     auto f0 = field("f0", type);
 
-    *schema = std::shared_ptr<Schema>(new Schema({f0}));
+    *schema = ::arrow::schema({f0});
 
     std::vector<std::shared_ptr<Array>> arrays = {array};
     *batch = std::make_shared<RecordBatch>(*schema, batch_length, arrays);
@@ -425,10 +421,10 @@ class RecursionLimits : public ::testing::Test, public io::MemoryMapFixture {
 
     if (override_level) {
       return WriteRecordBatch(**batch, 0, mmap_.get(), metadata_length, body_length,
-          pool_, recursion_level + 1);
+                              pool_, recursion_level + 1);
     } else {
-      return WriteRecordBatch(
-          **batch, 0, mmap_.get(), metadata_length, body_length, pool_);
+      return WriteRecordBatch(**batch, 0, mmap_.get(), metadata_length, body_length,
+                              pool_);
     }
   }
 
@@ -442,8 +438,8 @@ TEST_F(RecursionLimits, WriteLimit) {
   int64_t body_length = -1;
   std::shared_ptr<Schema> schema;
   std::shared_ptr<RecordBatch> batch;
-  ASSERT_RAISES(Invalid,
-      WriteToMmap((1 << 8) + 1, false, &metadata_length, &body_length, &batch, &schema));
+  ASSERT_RAISES(Invalid, WriteToMmap((1 << 8) + 1, false, &metadata_length, &body_length,
+                                     &batch, &schema));
 }
 
 TEST_F(RecursionLimits, ReadLimit) {
@@ -454,8 +450,8 @@ TEST_F(RecursionLimits, ReadLimit) {
   const int recursion_depth = 64;
 
   std::shared_ptr<RecordBatch> batch;
-  ASSERT_OK(WriteToMmap(
-      recursion_depth, true, &metadata_length, &body_length, &batch, &schema));
+  ASSERT_OK(WriteToMmap(recursion_depth, true, &metadata_length, &body_length, &batch,
+                        &schema));
 
   std::unique_ptr<Message> message;
   ASSERT_OK(ReadMessage(0, metadata_length, mmap_.get(), &message));
@@ -472,16 +468,16 @@ TEST_F(RecursionLimits, StressLimit) {
     int64_t body_length = -1;
     std::shared_ptr<Schema> schema;
     std::shared_ptr<RecordBatch> batch;
-    ASSERT_OK(WriteToMmap(
-        recursion_depth, true, &metadata_length, &body_length, &batch, &schema));
+    ASSERT_OK(WriteToMmap(recursion_depth, true, &metadata_length, &body_length, &batch,
+                          &schema));
 
     std::unique_ptr<Message> message;
     ASSERT_OK(ReadMessage(0, metadata_length, mmap_.get(), &message));
 
     io::BufferReader reader(message->body());
     std::shared_ptr<RecordBatch> result;
-    ASSERT_OK(ReadRecordBatch(
-        *message->metadata(), schema, recursion_depth + 1, &reader, &result));
+    ASSERT_OK(ReadRecordBatch(*message->metadata(), schema, recursion_depth + 1, &reader,
+                              &result));
     *it_works = result->Equals(*batch);
   };
 
@@ -504,7 +500,7 @@ class TestFileFormat : public ::testing::TestWithParam<MakeRecordBatch*> {
 
   Status RoundTripHelper(const BatchVector& in_batches, BatchVector* out_batches) {
     // Write the file
-    std::shared_ptr<RecordBatchFileWriter> writer;
+    std::shared_ptr<RecordBatchWriter> writer;
     RETURN_NOT_OK(
         RecordBatchFileWriter::Open(sink_.get(), in_batches[0]->schema(), &writer));
 
@@ -523,7 +519,7 @@ class TestFileFormat : public ::testing::TestWithParam<MakeRecordBatch*> {
     // Open the file
     auto buf_reader = std::make_shared<io::BufferReader>(buffer_);
     std::shared_ptr<RecordBatchFileReader> reader;
-    RETURN_NOT_OK(RecordBatchFileReader::Open(buf_reader, footer_offset, &reader));
+    RETURN_NOT_OK(RecordBatchFileReader::Open(buf_reader.get(), footer_offset, &reader));
 
     EXPECT_EQ(num_batches, reader->num_record_batches());
     for (int i = 0; i < num_batches; ++i) {
@@ -568,10 +564,10 @@ class TestStreamFormat : public ::testing::TestWithParam<MakeRecordBatch*> {
   }
   void TearDown() {}
 
-  Status RoundTripHelper(
-      const RecordBatch& batch, std::vector<std::shared_ptr<RecordBatch>>* out_batches) {
+  Status RoundTripHelper(const RecordBatch& batch,
+                         std::vector<std::shared_ptr<RecordBatch>>* out_batches) {
     // Write the file
-    std::shared_ptr<RecordBatchStreamWriter> writer;
+    std::shared_ptr<RecordBatchWriter> writer;
     RETURN_NOT_OK(RecordBatchStreamWriter::Open(sink_.get(), batch.schema(), &writer));
     int num_batches = 5;
     for (int i = 0; i < num_batches; ++i) {
@@ -581,15 +577,17 @@ class TestStreamFormat : public ::testing::TestWithParam<MakeRecordBatch*> {
     RETURN_NOT_OK(sink_->Close());
 
     // Open the file
-    auto buf_reader = std::make_shared<io::BufferReader>(buffer_);
+    io::BufferReader buf_reader(buffer_);
 
-    std::shared_ptr<RecordBatchStreamReader> reader;
-    RETURN_NOT_OK(RecordBatchStreamReader::Open(buf_reader, &reader));
+    std::shared_ptr<RecordBatchReader> reader;
+    RETURN_NOT_OK(RecordBatchStreamReader::Open(&buf_reader, &reader));
 
     std::shared_ptr<RecordBatch> chunk;
     while (true) {
       RETURN_NOT_OK(reader->ReadNextRecordBatch(&chunk));
-      if (chunk == nullptr) { break; }
+      if (chunk == nullptr) {
+        break;
+      }
       out_batches->emplace_back(chunk);
     }
     return Status::OK();
@@ -647,9 +645,6 @@ TEST_F(TestIpcRoundTrip, LargeRecordBatch) {
   CheckReadResult(*result, batch);
 
   ASSERT_EQ(length, result->num_rows());
-
-  // Fails if we try to write this with the normal code path
-  ASSERT_RAISES(Invalid, DoStandardRoundTrip(batch, false, &result));
 }
 
 void CheckBatchDictionaries(const RecordBatch& batch) {
@@ -747,8 +742,8 @@ TEST_F(TestTensorRoundTrip, NonContiguous) {
   int32_t metadata_length;
   int64_t body_length;
   ASSERT_OK(mmap_->Seek(0));
-  ASSERT_RAISES(
-      Invalid, WriteTensor(tensor, mmap_.get(), &metadata_length, &body_length));
+  ASSERT_RAISES(Invalid,
+                WriteTensor(tensor, mmap_.get(), &metadata_length, &body_length));
 }
 
 }  // namespace ipc

@@ -132,6 +132,30 @@ public class UnionVector implements FieldVector {
     return internalMap.addOrGet(fieldName(minorType), fieldType(minorType), c);
   }
 
+  @Override
+  public long getValidityBufferAddress() {
+    return typeVector.getDataBuffer().memoryAddress();
+  }
+
+  @Override
+  public long getDataBufferAddress() {
+    throw new UnsupportedOperationException();
+  }
+
+  @Override
+  public long getOffsetBufferAddress() {
+    throw new UnsupportedOperationException();
+  }
+
+  @Override
+  public ArrowBuf getValidityBuffer() { return typeVector.getDataBuffer(); }
+
+  @Override
+  public ArrowBuf getDataBuffer() { throw new UnsupportedOperationException(); }
+
+  @Override
+  public ArrowBuf getOffsetBuffer() { throw new UnsupportedOperationException(); }
+
   public NullableMapVector getMap() {
     if (mapVector == null) {
       int vectorCount = internalMap.size();
@@ -321,10 +345,8 @@ public class UnionVector implements FieldVector {
 
     @Override
     public void splitAndTransfer(int startIndex, int length) {
-      to.allocateNew();
-      for (int i = 0; i < length; i++) {
-        to.copyFromSafe(startIndex + i, i, org.apache.arrow.vector.complex.UnionVector.this);
-      }
+      internalMapVectorTransferPair.splitAndTransfer(startIndex, length);
+      typeVectorTransferPair.splitAndTransfer(startIndex, length);
       to.getMutator().setValueCount(length);
     }
 

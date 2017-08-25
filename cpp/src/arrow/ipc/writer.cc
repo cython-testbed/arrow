@@ -28,7 +28,8 @@
 #include "arrow/buffer.h"
 #include "arrow/io/interfaces.h"
 #include "arrow/io/memory.h"
-#include "arrow/ipc/metadata.h"
+#include "arrow/ipc/message.h"
+#include "arrow/ipc/metadata-internal.h"
 #include "arrow/ipc/util.h"
 #include "arrow/memory_pool.h"
 #include "arrow/status.h"
@@ -45,8 +46,9 @@ namespace ipc {
 // Record batch write path
 
 static inline Status GetTruncatedBitmap(int64_t offset, int64_t length,
-    const std::shared_ptr<Buffer> input, MemoryPool* pool,
-    std::shared_ptr<Buffer>* buffer) {
+                                        const std::shared_ptr<Buffer> input,
+                                        MemoryPool* pool,
+                                        std::shared_ptr<Buffer>* buffer) {
   if (!input) {
     *buffer = input;
     return Status::OK();
@@ -63,8 +65,8 @@ static inline Status GetTruncatedBitmap(int64_t offset, int64_t length,
 
 template <typename T>
 inline Status GetTruncatedBuffer(int64_t offset, int64_t length,
-    const std::shared_ptr<Buffer> input, MemoryPool* pool,
-    std::shared_ptr<Buffer>* buffer) {
+                                 const std::shared_ptr<Buffer> input, MemoryPool* pool,
+                                 std::shared_ptr<Buffer>* buffer) {
   if (!input) {
     *buffer = input;
     return Status::OK();
@@ -80,17 +82,19 @@ inline Status GetTruncatedBuffer(int64_t offset, int64_t length,
   return Status::OK();
 }
 
-static inline bool NeedTruncate(
-    int64_t offset, const Buffer* buffer, int64_t min_length) {
+static inline bool NeedTruncate(int64_t offset, const Buffer* buffer,
+                                int64_t min_length) {
   // buffer can be NULL
-  if (buffer == nullptr) { return false; }
+  if (buffer == nullptr) {
+    return false;
+  }
   return offset != 0 || min_length < buffer->size();
 }
 
 class RecordBatchSerializer : public ArrayVisitor {
  public:
   RecordBatchSerializer(MemoryPool* pool, int64_t buffer_start_offset,
-      int max_recursion_depth, bool allow_64bit)
+                        int max_recursion_depth, bool allow_64bit)
       : pool_(pool),
         max_recursion_depth_(max_recursion_depth),
         buffer_start_offset_(buffer_start_offset),
@@ -114,8 +118,8 @@ class RecordBatchSerializer : public ArrayVisitor {
 
     if (arr.null_count() > 0) {
       std::shared_ptr<Buffer> bitmap;
-      RETURN_NOT_OK(GetTruncatedBitmap(
-          arr.offset(), arr.length(), arr.null_bitmap(), pool_, &bitmap));
+      RETURN_NOT_OK(GetTruncatedBitmap(arr.offset(), arr.length(), arr.null_bitmap(),
+                                       pool_, &bitmap));
       buffers_.push_back(bitmap);
     } else {
       // Push a dummy zero-length buffer, not to be copied
@@ -153,7 +157,7 @@ class RecordBatchSerializer : public ArrayVisitor {
       // The buffer might be null if we are handling zero row lengths.
       if (buffer) {
         size = buffer->size();
-        padding = BitUtil::RoundUpToMultipleOf64(size) - size;
+        padding = BitUtil::RoundUpToMultipleOf8(size) - size;
       }
 
       // TODO(wesm): We currently have no notion of shared memory page id's,
@@ -169,20 +173,20 @@ class RecordBatchSerializer : public ArrayVisitor {
     }
 
     *body_length = offset - buffer_start_offset_;
-    DCHECK(BitUtil::IsMultipleOf64(*body_length));
+    DCHECK(BitUtil::IsMultipleOf8(*body_length));
 
     return Status::OK();
   }
 
   // Override this for writing dictionary metadata
-  virtual Status WriteMetadataMessage(
-      int64_t num_rows, int64_t body_length, std::shared_ptr<Buffer>* out) {
-    return WriteRecordBatchMessage(
-        num_rows, body_length, field_nodes_, buffer_meta_, out);
+  virtual Status WriteMetadataMessage(int64_t num_rows, int64_t body_length,
+                                      std::shared_ptr<Buffer>* out) {
+    return WriteRecordBatchMessage(num_rows, body_length, field_nodes_, buffer_meta_,
+                                   out);
   }
 
   Status Write(const RecordBatch& batch, io::OutputStream* dst, int32_t* metadata_length,
-      int64_t* body_length) {
+               int64_t* body_length) {
     RETURN_NOT_OK(Assemble(batch, body_length));
 
 #ifndef NDEBUG
@@ -213,12 +217,16 @@ class RecordBatchSerializer : public ArrayVisitor {
       // The buffer might be null if we are handling zero row lengths.
       if (buffer) {
         size = buffer->size();
-        padding = BitUtil::RoundUpToMultipleOf64(size) - size;
+        padding = BitUtil::RoundUpToMultipleOf8(size) - size;
       }
 
-      if (size > 0) { RETURN_NOT_OK(dst->Write(buffer->data(), size)); }
+      if (size > 0) {
+        RETURN_NOT_OK(dst->Write(buffer->data(), size));
+      }
 
-      if (padding > 0) { RETURN_NOT_OK(dst->Write(kPaddingBytes, padding)); }
+      if (padding > 0) {
+        RETURN_NOT_OK(dst->Write(kPaddingBytes, padding));
+      }
     }
 
 #ifndef NDEBUG
@@ -244,8 +252,8 @@ class RecordBatchSerializer : public ArrayVisitor {
 
       // Send padding if it's available
       const int64_t buffer_length =
-          std::min(BitUtil::RoundUpToMultipleOf64(array.length() * type_width),
-              data->size() - byte_offset);
+          std::min(BitUtil::RoundUpToMultipleOf8(array.length() * type_width),
+                   data->size() - byte_offset);
       data = SliceBuffer(data, byte_offset, buffer_length);
     }
     buffers_.push_back(data);
@@ -253,8 +261,8 @@ class RecordBatchSerializer : public ArrayVisitor {
   }
 
   template <typename ArrayType>
-  Status GetZeroBasedValueOffsets(
-      const ArrayType& array, std::shared_ptr<Buffer>* value_offsets) {
+  Status GetZeroBasedValueOffsets(const ArrayType& array,
+                                  std::shared_ptr<Buffer>* value_offsets) {
     // Share slicing logic between ListArray and BinaryArray
 
     auto offsets = array.value_offsets();
@@ -265,8 +273,8 @@ class RecordBatchSerializer : public ArrayVisitor {
       // b) slice the values array accordingly
 
       std::shared_ptr<MutableBuffer> shifted_offsets;
-      RETURN_NOT_OK(AllocateBuffer(
-          pool_, sizeof(int32_t) * (array.length() + 1), &shifted_offsets));
+      RETURN_NOT_OK(AllocateBuffer(pool_, sizeof(int32_t) * (array.length() + 1),
+                                   &shifted_offsets));
 
       int32_t* dest_offsets = reinterpret_cast<int32_t*>(shifted_offsets->mutable_data());
       const int32_t start_offset = array.value_offset(0);
@@ -392,13 +400,15 @@ class RecordBatchSerializer : public ArrayVisitor {
       const auto& type = static_cast<const UnionType&>(*array.type());
 
       std::shared_ptr<Buffer> value_offsets;
-      RETURN_NOT_OK(GetTruncatedBuffer<int32_t>(
-          offset, length, array.value_offsets(), pool_, &value_offsets));
+      RETURN_NOT_OK(GetTruncatedBuffer<int32_t>(offset, length, array.value_offsets(),
+                                                pool_, &value_offsets));
 
       // The Union type codes are not necessary 0-indexed
       uint8_t max_code = 0;
       for (uint8_t code : type.type_codes()) {
-        if (code > max_code) { max_code = code; }
+        if (code > max_code) {
+          max_code = code;
+        }
       }
 
       // Allocate an array of child offsets. Set all to -1 to indicate that we
@@ -424,7 +434,9 @@ class RecordBatchSerializer : public ArrayVisitor {
         for (int64_t i = 0; i < length; ++i) {
           const uint8_t code = type_ids[i];
           int32_t shift = child_offsets[code];
-          if (shift == -1) { child_offsets[code] = shift = unshifted_offsets[i]; }
+          if (shift == -1) {
+            child_offsets[code] = shift = unshifted_offsets[i];
+          }
           shifted_offsets[i] = unshifted_offsets[i] - shift;
 
           // Update the child length to account for observed value
@@ -486,14 +498,14 @@ class DictionaryWriter : public RecordBatchSerializer {
  public:
   using RecordBatchSerializer::RecordBatchSerializer;
 
-  Status WriteMetadataMessage(
-      int64_t num_rows, int64_t body_length, std::shared_ptr<Buffer>* out) override {
-    return WriteDictionaryMessage(
-        dictionary_id_, num_rows, body_length, field_nodes_, buffer_meta_, out);
+  Status WriteMetadataMessage(int64_t num_rows, int64_t body_length,
+                              std::shared_ptr<Buffer>* out) override {
+    return WriteDictionaryMessage(dictionary_id_, num_rows, body_length, field_nodes_,
+                                  buffer_meta_, out);
   }
 
   Status Write(int64_t dictionary_id, const std::shared_ptr<Array>& dictionary,
-      io::OutputStream* dst, int32_t* metadata_length, int64_t* body_length) {
+               io::OutputStream* dst, int32_t* metadata_length, int64_t* body_length) {
     dictionary_id_ = dictionary_id;
 
     // Make a dummy record batch. A bit tedious as we have to make a schema
@@ -516,27 +528,43 @@ Status AlignStreamPosition(io::OutputStream* stream) {
   int64_t position;
   RETURN_NOT_OK(stream->Tell(&position));
   int64_t remainder = PaddedLength(position) - position;
-  if (remainder > 0) { return stream->Write(kPaddingBytes, remainder); }
+  if (remainder > 0) {
+    return stream->Write(kPaddingBytes, remainder);
+  }
   return Status::OK();
 }
 
 Status WriteRecordBatch(const RecordBatch& batch, int64_t buffer_start_offset,
-    io::OutputStream* dst, int32_t* metadata_length, int64_t* body_length,
-    MemoryPool* pool, int max_recursion_depth, bool allow_64bit) {
-  RecordBatchSerializer writer(
-      pool, buffer_start_offset, max_recursion_depth, allow_64bit);
+                        io::OutputStream* dst, int32_t* metadata_length,
+                        int64_t* body_length, MemoryPool* pool, int max_recursion_depth,
+                        bool allow_64bit) {
+  RecordBatchSerializer writer(pool, buffer_start_offset, max_recursion_depth,
+                               allow_64bit);
   return writer.Write(batch, dst, metadata_length, body_length);
 }
 
+Status WriteRecordBatchStream(const std::vector<std::shared_ptr<RecordBatch>>& batches,
+                              io::OutputStream* dst) {
+  std::shared_ptr<RecordBatchWriter> writer;
+  RETURN_NOT_OK(RecordBatchStreamWriter::Open(dst, batches[0]->schema(), &writer));
+  for (const auto& batch : batches) {
+    // allow sizes > INT32_MAX
+    DCHECK(batch->schema()->Equals(*batches[0]->schema())) << "Schemas unequal";
+    RETURN_NOT_OK(writer->WriteRecordBatch(*batch, true));
+  }
+  RETURN_NOT_OK(writer->Close());
+  return Status::OK();
+}
+
 Status WriteLargeRecordBatch(const RecordBatch& batch, int64_t buffer_start_offset,
-    io::OutputStream* dst, int32_t* metadata_length, int64_t* body_length,
-    MemoryPool* pool) {
+                             io::OutputStream* dst, int32_t* metadata_length,
+                             int64_t* body_length, MemoryPool* pool) {
   return WriteRecordBatch(batch, buffer_start_offset, dst, metadata_length, body_length,
-      pool, kMaxNestingDepth, true);
+                          pool, kMaxNestingDepth, true);
 }
 
 Status WriteTensor(const Tensor& tensor, io::OutputStream* dst, int32_t* metadata_length,
-    int64_t* body_length) {
+                   int64_t* body_length) {
   if (!tensor.is_contiguous()) {
     return Status::Invalid("No support yet for writing non-contiguous tensors");
   }
@@ -556,8 +584,8 @@ Status WriteTensor(const Tensor& tensor, io::OutputStream* dst, int32_t* metadat
 }
 
 Status WriteDictionary(int64_t dictionary_id, const std::shared_ptr<Array>& dictionary,
-    int64_t buffer_start_offset, io::OutputStream* dst, int32_t* metadata_length,
-    int64_t* body_length, MemoryPool* pool) {
+                       int64_t buffer_start_offset, io::OutputStream* dst,
+                       int32_t* metadata_length, int64_t* body_length, MemoryPool* pool) {
   DictionaryWriter writer(pool, buffer_start_offset, kMaxNestingDepth, false);
   return writer.Write(dictionary_id, dictionary, dst, metadata_length, body_length);
 }
@@ -568,7 +596,7 @@ Status GetRecordBatchSize(const RecordBatch& batch, int64_t* size) {
   int64_t body_length = 0;
   io::MockOutputStream dst;
   RETURN_NOT_OK(WriteRecordBatch(batch, 0, &dst, &metadata_length, &body_length,
-      default_memory_pool(), kMaxNestingDepth, true));
+                                 default_memory_pool(), kMaxNestingDepth, true));
   *size = dst.GetExtentBytesWritten();
   return Status::OK();
 }
@@ -590,33 +618,102 @@ RecordBatchWriter::~RecordBatchWriter() {}
 // ----------------------------------------------------------------------
 // Stream writer implementation
 
-class RecordBatchStreamWriter::RecordBatchStreamWriterImpl {
+class StreamBookKeeper {
  public:
-  RecordBatchStreamWriterImpl()
-      : pool_(default_memory_pool()), position_(-1), started_(false) {}
+  StreamBookKeeper() : sink_(nullptr), position_(-1) {}
+  explicit StreamBookKeeper(io::OutputStream* sink) : sink_(sink), position_(-1) {}
+
+  Status UpdatePosition() { return sink_->Tell(&position_); }
+
+  Status Align(int64_t alignment = kArrowIpcAlignment) {
+    // Adds padding bytes if necessary to ensure all memory blocks are written on
+    // 8-byte (or other alignment) boundaries.
+    int64_t remainder = PaddedLength(position_, alignment) - position_;
+    if (remainder > 0) {
+      return Write(kPaddingBytes, remainder);
+    }
+    return Status::OK();
+  }
+
+  // Write data and update position
+  Status Write(const uint8_t* data, int64_t nbytes) {
+    RETURN_NOT_OK(sink_->Write(data, nbytes));
+    position_ += nbytes;
+    return Status::OK();
+  }
+
+ protected:
+  io::OutputStream* sink_;
+  int64_t position_;
+};
+
+class SchemaWriter : public StreamBookKeeper {
+ public:
+  SchemaWriter(const Schema& schema, DictionaryMemo* dictionary_memo, MemoryPool* pool,
+               io::OutputStream* sink)
+      : StreamBookKeeper(sink), schema_(schema), dictionary_memo_(dictionary_memo) {}
+
+  Status WriteSchema() {
+    std::shared_ptr<Buffer> schema_fb;
+    RETURN_NOT_OK(WriteSchemaMessage(schema_, dictionary_memo_, &schema_fb));
+
+    int32_t metadata_length = 0;
+    RETURN_NOT_OK(WriteMessage(*schema_fb, sink_, &metadata_length));
+    RETURN_NOT_OK(UpdatePosition());
+    DCHECK_EQ(0, position_ % 8) << "WriteSchema did not perform an aligned write";
+    return Status::OK();
+  }
+
+  Status WriteDictionaries(std::vector<FileBlock>* dictionaries) {
+    const DictionaryMap& id_to_dictionary = dictionary_memo_->id_to_dictionary();
+
+    dictionaries->resize(id_to_dictionary.size());
+
+    // TODO(wesm): does sorting by id yield any benefit?
+    int dict_index = 0;
+    for (const auto& entry : id_to_dictionary) {
+      FileBlock* block = &(*dictionaries)[dict_index++];
+
+      block->offset = position_;
+
+      // Frame of reference in file format is 0, see ARROW-384
+      const int64_t buffer_start_offset = 0;
+      RETURN_NOT_OK(WriteDictionary(entry.first, entry.second, buffer_start_offset, sink_,
+                                    &block->metadata_length, &block->body_length, pool_));
+      RETURN_NOT_OK(UpdatePosition());
+      DCHECK(position_ % 8 == 0) << "WriteDictionary did not perform aligned writes";
+    }
+
+    return Status::OK();
+  }
+
+  Status Write(std::vector<FileBlock>* dictionaries) {
+    RETURN_NOT_OK(WriteSchema());
+
+    // If there are any dictionaries, write them as the next messages
+    return WriteDictionaries(dictionaries);
+  }
+
+ private:
+  MemoryPool* pool_;
+  const Schema& schema_;
+  DictionaryMemo* dictionary_memo_;
+};
+
+class RecordBatchStreamWriter::RecordBatchStreamWriterImpl : public StreamBookKeeper {
+ public:
+  RecordBatchStreamWriterImpl(io::OutputStream* sink,
+                              const std::shared_ptr<Schema>& schema)
+      : StreamBookKeeper(sink),
+        schema_(schema),
+        pool_(default_memory_pool()),
+        started_(false) {}
 
   virtual ~RecordBatchStreamWriterImpl() = default;
 
-  Status Open(io::OutputStream* sink, const std::shared_ptr<Schema>& schema) {
-    sink_ = sink;
-    schema_ = schema;
-    return UpdatePosition();
-  }
-
   virtual Status Start() {
-    std::shared_ptr<Buffer> schema_fb;
-    RETURN_NOT_OK(WriteSchemaMessage(*schema_, &dictionary_memo_, &schema_fb));
-
-    int32_t flatbuffer_size = static_cast<int32_t>(schema_fb->size());
-    RETURN_NOT_OK(
-        Write(reinterpret_cast<const uint8_t*>(&flatbuffer_size), sizeof(int32_t)));
-
-    // Write the flatbuffer
-    RETURN_NOT_OK(Write(schema_fb->data(), flatbuffer_size));
-
-    // If there are any dictionaries, write them as the next messages
-    RETURN_NOT_OK(WriteDictionaries());
-
+    SchemaWriter schema_writer(*schema_, &dictionary_memo_, pool_, sink_);
+    RETURN_NOT_OK(schema_writer.Write(&dictionaries_));
     started_ = true;
     return Status::OK();
   }
@@ -632,45 +729,23 @@ class RecordBatchStreamWriter::RecordBatchStreamWriterImpl {
   }
 
   Status CheckStarted() {
-    if (!started_) { return Start(); }
-    return Status::OK();
-  }
-
-  Status UpdatePosition() { return sink_->Tell(&position_); }
-
-  Status WriteDictionaries() {
-    const DictionaryMap& id_to_dictionary = dictionary_memo_.id_to_dictionary();
-
-    dictionaries_.resize(id_to_dictionary.size());
-
-    // TODO(wesm): does sorting by id yield any benefit?
-    int dict_index = 0;
-    for (const auto& entry : id_to_dictionary) {
-      FileBlock* block = &dictionaries_[dict_index++];
-
-      block->offset = position_;
-
-      // Frame of reference in file format is 0, see ARROW-384
-      const int64_t buffer_start_offset = 0;
-      RETURN_NOT_OK(WriteDictionary(entry.first, entry.second, buffer_start_offset, sink_,
-          &block->metadata_length, &block->body_length, pool_));
-      RETURN_NOT_OK(UpdatePosition());
-      DCHECK(position_ % 8 == 0) << "WriteDictionary did not perform aligned writes";
+    if (!started_) {
+      return Start();
     }
-
     return Status::OK();
   }
 
   Status WriteRecordBatch(const RecordBatch& batch, bool allow_64bit, FileBlock* block) {
     RETURN_NOT_OK(CheckStarted());
+    RETURN_NOT_OK(UpdatePosition());
 
     block->offset = position_;
 
     // Frame of reference in file format is 0, see ARROW-384
     const int64_t buffer_start_offset = 0;
-    RETURN_NOT_OK(arrow::ipc::WriteRecordBatch(batch, buffer_start_offset, sink_,
-        &block->metadata_length, &block->body_length, pool_, kMaxNestingDepth,
-        allow_64bit));
+    RETURN_NOT_OK(arrow::ipc::WriteRecordBatch(
+        batch, buffer_start_offset, sink_, &block->metadata_length, &block->body_length,
+        pool_, kMaxNestingDepth, allow_64bit));
     RETURN_NOT_OK(UpdatePosition());
 
     DCHECK(position_ % 8 == 0) << "WriteRecordBatch did not perform aligned writes";
@@ -681,52 +756,31 @@ class RecordBatchStreamWriter::RecordBatchStreamWriterImpl {
   Status WriteRecordBatch(const RecordBatch& batch, bool allow_64bit) {
     // Push an empty FileBlock. Can be written in the footer later
     record_batches_.push_back({0, 0, 0});
-    return WriteRecordBatch(
-        batch, allow_64bit, &record_batches_[record_batches_.size() - 1]);
-  }
-
-  // Adds padding bytes if necessary to ensure all memory blocks are written on
-  // 64-byte (or other alignment) boundaries.
-  Status Align(int64_t alignment = kArrowAlignment) {
-    int64_t remainder = PaddedLength(position_, alignment) - position_;
-    if (remainder > 0) { return Write(kPaddingBytes, remainder); }
-    return Status::OK();
-  }
-
-  // Write data and update position
-  Status Write(const uint8_t* data, int64_t nbytes) {
-    RETURN_NOT_OK(sink_->Write(data, nbytes));
-    position_ += nbytes;
-    return Status::OK();
+    return WriteRecordBatch(batch, allow_64bit,
+                            &record_batches_[record_batches_.size() - 1]);
   }
 
   void set_memory_pool(MemoryPool* pool) { pool_ = pool; }
 
  protected:
-  io::OutputStream* sink_;
   std::shared_ptr<Schema> schema_;
+  MemoryPool* pool_;
+  bool started_;
 
   // When writing out the schema, we keep track of all the dictionaries we
   // encounter, as they must be written out first in the stream
   DictionaryMemo dictionary_memo_;
 
-  MemoryPool* pool_;
-
-  int64_t position_;
-  bool started_;
-
   std::vector<FileBlock> dictionaries_;
   std::vector<FileBlock> record_batches_;
 };
 
-RecordBatchStreamWriter::RecordBatchStreamWriter() {
-  impl_.reset(new RecordBatchStreamWriterImpl());
-}
+RecordBatchStreamWriter::RecordBatchStreamWriter() {}
 
 RecordBatchStreamWriter::~RecordBatchStreamWriter() {}
 
-Status RecordBatchStreamWriter::WriteRecordBatch(
-    const RecordBatch& batch, bool allow_64bit) {
+Status RecordBatchStreamWriter::WriteRecordBatch(const RecordBatch& batch,
+                                                 bool allow_64bit) {
   return impl_->WriteRecordBatch(batch, allow_64bit);
 }
 
@@ -735,16 +789,27 @@ void RecordBatchStreamWriter::set_memory_pool(MemoryPool* pool) {
 }
 
 Status RecordBatchStreamWriter::Open(io::OutputStream* sink,
-    const std::shared_ptr<Schema>& schema,
-    std::shared_ptr<RecordBatchStreamWriter>* out) {
+                                     const std::shared_ptr<Schema>& schema,
+                                     std::shared_ptr<RecordBatchWriter>* out) {
   // ctor is private
-  *out = std::shared_ptr<RecordBatchStreamWriter>(new RecordBatchStreamWriter());
-  return (*out)->impl_->Open(sink, schema);
+  auto result = std::shared_ptr<RecordBatchStreamWriter>(new RecordBatchStreamWriter());
+  result->impl_.reset(new RecordBatchStreamWriterImpl(sink, schema));
+  *out = result;
+  return Status::OK();
 }
 
-Status RecordBatchStreamWriter::Close() {
-  return impl_->Close();
+#ifndef ARROW_NO_DEPRECATED_API
+Status RecordBatchStreamWriter::Open(io::OutputStream* sink,
+                                     const std::shared_ptr<Schema>& schema,
+                                     std::shared_ptr<RecordBatchStreamWriter>* out) {
+  // ctor is private
+  *out = std::shared_ptr<RecordBatchStreamWriter>(new RecordBatchStreamWriter());
+  (*out)->impl_.reset(new RecordBatchStreamWriterImpl(sink, schema));
+  return Status::OK();
 }
+#endif
+
+Status RecordBatchStreamWriter::Close() { return impl_->Close(); }
 
 // ----------------------------------------------------------------------
 // File writer implementation
@@ -754,11 +819,14 @@ class RecordBatchFileWriter::RecordBatchFileWriterImpl
  public:
   using BASE = RecordBatchStreamWriter::RecordBatchStreamWriterImpl;
 
+  RecordBatchFileWriterImpl(io::OutputStream* sink, const std::shared_ptr<Schema>& schema)
+      : BASE(sink, schema) {}
+
   Status Start() override {
     // It is only necessary to align to 8-byte boundary at the start of the file
-    RETURN_NOT_OK(Write(
-        reinterpret_cast<const uint8_t*>(kArrowMagicBytes), strlen(kArrowMagicBytes)));
-    RETURN_NOT_OK(Align(8));
+    RETURN_NOT_OK(Write(reinterpret_cast<const uint8_t*>(kArrowMagicBytes),
+                        strlen(kArrowMagicBytes)));
+    RETURN_NOT_OK(Align());
 
     // We write the schema at the start of the file (and the end). This also
     // writes all the dictionaries at the beginning of the file
@@ -767,45 +835,93 @@ class RecordBatchFileWriter::RecordBatchFileWriterImpl
 
   Status Close() override {
     // Write metadata
+    RETURN_NOT_OK(UpdatePosition());
+
     int64_t initial_position = position_;
-    RETURN_NOT_OK(WriteFileFooter(
-        *schema_, dictionaries_, record_batches_, &dictionary_memo_, sink_));
+    RETURN_NOT_OK(WriteFileFooter(*schema_, dictionaries_, record_batches_,
+                                  &dictionary_memo_, sink_));
     RETURN_NOT_OK(UpdatePosition());
 
     // Write footer length
     int32_t footer_length = static_cast<int32_t>(position_ - initial_position);
 
-    if (footer_length <= 0) { return Status::Invalid("Invalid file footer"); }
+    if (footer_length <= 0) {
+      return Status::Invalid("Invalid file footer");
+    }
 
     RETURN_NOT_OK(
         Write(reinterpret_cast<const uint8_t*>(&footer_length), sizeof(int32_t)));
 
     // Write magic bytes to end file
-    return Write(
-        reinterpret_cast<const uint8_t*>(kArrowMagicBytes), strlen(kArrowMagicBytes));
+    return Write(reinterpret_cast<const uint8_t*>(kArrowMagicBytes),
+                 strlen(kArrowMagicBytes));
   }
 };
 
-RecordBatchFileWriter::RecordBatchFileWriter() {
-  impl_.reset(new RecordBatchFileWriterImpl());
-}
+RecordBatchFileWriter::RecordBatchFileWriter() {}
 
 RecordBatchFileWriter::~RecordBatchFileWriter() {}
 
 Status RecordBatchFileWriter::Open(io::OutputStream* sink,
-    const std::shared_ptr<Schema>& schema, std::shared_ptr<RecordBatchFileWriter>* out) {
-  *out = std::shared_ptr<RecordBatchFileWriter>(
-      new RecordBatchFileWriter());  // ctor is private
-  return (*out)->impl_->Open(sink, schema);
+                                   const std::shared_ptr<Schema>& schema,
+                                   std::shared_ptr<RecordBatchWriter>* out) {
+  // ctor is private
+  auto result = std::shared_ptr<RecordBatchFileWriter>(new RecordBatchFileWriter());
+  result->impl_.reset(new RecordBatchFileWriterImpl(sink, schema));
+  *out = result;
+  return Status::OK();
 }
 
-Status RecordBatchFileWriter::WriteRecordBatch(
-    const RecordBatch& batch, bool allow_64bit) {
+#ifndef ARROW_NO_DEPRECATED_API
+Status RecordBatchFileWriter::Open(io::OutputStream* sink,
+                                   const std::shared_ptr<Schema>& schema,
+                                   std::shared_ptr<RecordBatchFileWriter>* out) {
+  // ctor is private
+  *out = std::shared_ptr<RecordBatchFileWriter>(new RecordBatchFileWriter());
+  (*out)->impl_.reset(new RecordBatchFileWriterImpl(sink, schema));
+  return Status::OK();
+}
+#endif
+
+Status RecordBatchFileWriter::WriteRecordBatch(const RecordBatch& batch,
+                                               bool allow_64bit) {
   return impl_->WriteRecordBatch(batch, allow_64bit);
 }
 
-Status RecordBatchFileWriter::Close() {
-  return impl_->Close();
+Status RecordBatchFileWriter::Close() { return impl_->Close(); }
+
+// ----------------------------------------------------------------------
+// Serialization public APIs
+
+Status SerializeRecordBatch(const RecordBatch& batch, MemoryPool* pool,
+                            std::shared_ptr<Buffer>* out) {
+  int64_t size = 0;
+  RETURN_NOT_OK(GetRecordBatchSize(batch, &size));
+  std::shared_ptr<MutableBuffer> buffer;
+  RETURN_NOT_OK(AllocateBuffer(pool, size, &buffer));
+
+  io::FixedSizeBufferWriter stream(buffer);
+  int32_t metadata_length = 0;
+  int64_t body_length = 0;
+  RETURN_NOT_OK(WriteRecordBatch(batch, 0, &stream, &metadata_length, &body_length, pool,
+                                 kMaxNestingDepth, true));
+  *out = buffer;
+  return Status::OK();
+}
+
+Status SerializeSchema(const Schema& schema, MemoryPool* pool,
+                       std::shared_ptr<Buffer>* out) {
+  std::shared_ptr<io::BufferOutputStream> stream;
+  RETURN_NOT_OK(io::BufferOutputStream::Create(1024, pool, &stream));
+
+  DictionaryMemo memo;
+  SchemaWriter schema_writer(schema, &memo, pool, stream.get());
+
+  // Unused
+  std::vector<FileBlock> dictionary_blocks;
+
+  RETURN_NOT_OK(schema_writer.Write(&dictionary_blocks));
+  return stream->Finish(out);
 }
 
 }  // namespace ipc

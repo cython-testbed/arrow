@@ -42,6 +42,7 @@ cdef extern from "arrow/api.h" namespace "arrow" nogil:
         CStatus()
 
         c_string ToString()
+        c_string message()
 
         c_bool ok()
         c_bool IsIOError()
@@ -50,6 +51,9 @@ cdef extern from "arrow/api.h" namespace "arrow" nogil:
         c_bool IsKeyError()
         c_bool IsNotImplemented()
         c_bool IsTypeError()
+        c_bool IsPlasmaObjectExists()
+        c_bool IsPlasmaObjectNonexistent()
+        c_bool IsPlasmaStoreFull()
 
 
 cdef inline object PyObject_to_object(PyObject* o):

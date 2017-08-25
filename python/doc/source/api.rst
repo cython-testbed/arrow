@@ -91,13 +91,14 @@ Scalar Value Types
 
 .. _api.array:
 
-Array Types and Constructors
-----------------------------
+.. currentmodule:: pyarrow.lib
+
+Array Types
+-----------
 
 .. autosummary::
    :toctree: generated/
 
-   array
    Array
    BooleanArray
    DictionaryArray
@@ -125,6 +126,8 @@ Array Types and Constructors
    ListArray
 
 .. _api.table:
+
+.. currentmodule:: pyarrow
 
 Tables and Record Batches
 -------------------------
@@ -164,10 +167,22 @@ Input / Output and Shared Memory
    create_memory_map
    PythonFile
 
+File Systems
+------------
+
+.. autosummary::
+   :toctree: generated/
+
+   hdfs.connect
+   LocalFileSystem
+
+.. class:: HadoopFileSystem
+   :noindex:
+
 .. _api.ipc:
 
-Interprocess Communication and Messaging
-----------------------------------------
+Interprocess Communication and Serialization
+--------------------------------------------
 
 .. autosummary::
    :toctree: generated/
@@ -186,6 +201,12 @@ Interprocess Communication and Messaging
    read_tensor
    write_tensor
    get_tensor_size
+   serialize
+   serialize_to
+   deserialize
+   deserialize_from
+   read_serialized
+   SerializedPyObject
 
 .. _api.memory_pool:
 
@@ -202,6 +223,8 @@ Memory Pools
 
 .. _api.type_classes:
 
+.. currentmodule:: pyarrow.lib
+
 Type Classes
 ------------
 
@@ -211,6 +234,20 @@ Type Classes
    DataType
    Field
    Schema
+
+.. currentmodule:: pyarrow.plasma
+
+.. _api.plasma:
+
+In-Memory Object Store
+----------------------
+
+.. autosummary::
+   :toctree: generated/
+
+   ObjectID
+   PlasmaClient
+   PlasmaBuffer
 
 .. currentmodule:: pyarrow.parquet
 
@@ -225,5 +262,8 @@ Apache Parquet
    ParquetDataset
    ParquetFile
    read_table
+   read_metadata
+   read_pandas
+   read_schema
    write_metadata
    write_table

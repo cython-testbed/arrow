@@ -15,14 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#include <sstream>
+
 #include "arrow/util/decimal.h"
 
 namespace arrow {
 namespace decimal {
 
 template <typename T>
-ARROW_EXPORT Status FromString(
-    const std::string& s, Decimal<T>* out, int* precision, int* scale) {
+ARROW_EXPORT Status FromString(const std::string& s, Decimal<T>* out, int* precision,
+                               int* scale) {
   // Implements this regex: "(\\+?|-?)((0*)(\\d*))(\\.(\\d+))?";
   if (s.empty()) {
     return Status::Invalid("Empty string cannot be converted to decimal");
@@ -34,7 +36,9 @@ ARROW_EXPORT Status FromString(
 
   char first_char = *charp;
   if (first_char == '+' || first_char == '-') {
-    if (first_char == '-') { sign = -1; }
+    if (first_char == '-') {
+      sign = -1;
+    }
     ++charp;
   }
 
@@ -55,7 +59,9 @@ ARROW_EXPORT Status FromString(
 
   // all zeros and no decimal point
   if (charp == end) {
-    if (out != nullptr) { out->value = static_cast<T>(0); }
+    if (out != nullptr) {
+      out->value = static_cast<T>(0);
+    }
 
     // Not sure what other libraries assign precision to for this case (this case of
     // a string consisting only of one or more zeros)
@@ -63,7 +69,9 @@ ARROW_EXPORT Status FromString(
       *precision = static_cast<int>(charp - numeric_string_start);
     }
 
-    if (scale != nullptr) { *scale = 0; }
+    if (scale != nullptr) {
+      *scale = 0;
+    }
 
     return Status::OK();
   }
@@ -127,52 +135,61 @@ ARROW_EXPORT Status FromString(
     *precision = static_cast<int>(whole_part.size() + fractional_part.size());
   }
 
-  if (scale != nullptr) { *scale = static_cast<int>(fractional_part.size()); }
+  if (scale != nullptr) {
+    *scale = static_cast<int>(fractional_part.size());
+  }
 
-  if (out != nullptr) { StringToInteger(whole_part, fractional_part, sign, &out->value); }
+  if (out != nullptr) {
+    StringToInteger(whole_part, fractional_part, sign, &out->value);
+  }
 
   return Status::OK();
 }
 
-template ARROW_EXPORT Status FromString(
-    const std::string& s, Decimal32* out, int* precision, int* scale);
-template ARROW_EXPORT Status FromString(
-    const std::string& s, Decimal64* out, int* precision, int* scale);
-template ARROW_EXPORT Status FromString(
-    const std::string& s, Decimal128* out, int* precision, int* scale);
+template ARROW_EXPORT Status FromString(const std::string& s, Decimal32* out,
+                                        int* precision, int* scale);
+template ARROW_EXPORT Status FromString(const std::string& s, Decimal64* out,
+                                        int* precision, int* scale);
+template ARROW_EXPORT Status FromString(const std::string& s, Decimal128* out,
+                                        int* precision, int* scale);
 
-void StringToInteger(
-    const std::string& whole, const std::string& fractional, int8_t sign, int32_t* out) {
+void StringToInteger(const std::string& whole, const std::string& fractional, int8_t sign,
+                     int32_t* out) {
   DCHECK(sign == -1 || sign == 1);
   DCHECK_NE(out, nullptr);
   DCHECK(!whole.empty() || !fractional.empty());
+
   if (!whole.empty()) {
-    *out = std::stoi(whole, nullptr, 10) *
+    *out = std::stoi(whole) *
            static_cast<int32_t>(pow(10.0, static_cast<double>(fractional.size())));
   }
-  if (!fractional.empty()) { *out += std::stoi(fractional, nullptr, 10); }
+  if (!fractional.empty()) {
+    *out += std::stoi(fractional, nullptr, 10);
+  }
   *out *= sign;
 }
 
-void StringToInteger(
-    const std::string& whole, const std::string& fractional, int8_t sign, int64_t* out) {
+void StringToInteger(const std::string& whole, const std::string& fractional, int8_t sign,
+                     int64_t* out) {
   DCHECK(sign == -1 || sign == 1);
   DCHECK_NE(out, nullptr);
   DCHECK(!whole.empty() || !fractional.empty());
   if (!whole.empty()) {
-    *out = static_cast<int64_t>(std::stoll(whole, nullptr, 10)) *
+    *out = static_cast<int64_t>(std::stoll(whole)) *
            static_cast<int64_t>(pow(10.0, static_cast<double>(fractional.size())));
   }
-  if (!fractional.empty()) { *out += std::stoll(fractional, nullptr, 10); }
+  if (!fractional.empty()) {
+    *out += std::stoll(fractional, nullptr, 10);
+  }
   *out *= sign;
 }
 
-void StringToInteger(
-    const std::string& whole, const std::string& fractional, int8_t sign, int128_t* out) {
+void StringToInteger(const std::string& whole, const std::string& fractional, int8_t sign,
+                     Int128* out) {
   DCHECK(sign == -1 || sign == 1);
   DCHECK_NE(out, nullptr);
   DCHECK(!whole.empty() || !fractional.empty());
-  *out = int128_t(whole + fractional) * sign;
+  *out = Int128(whole + fractional) * sign;
 }
 
 void FromBytes(const uint8_t* bytes, Decimal32* decimal) {
@@ -187,20 +204,8 @@ void FromBytes(const uint8_t* bytes, Decimal64* decimal) {
   decimal->value = *reinterpret_cast<const int64_t*>(bytes);
 }
 
-constexpr static const size_t BYTES_IN_128_BITS = 128 / CHAR_BIT;
-constexpr static const size_t LIMB_SIZE =
-    sizeof(std::remove_pointer<int128_t::backend_type::limb_pointer>::type);
-constexpr static const size_t LIMBS_IN_INT128 = BYTES_IN_128_BITS / LIMB_SIZE;
-
-void FromBytes(const uint8_t* bytes, bool is_negative, Decimal128* decimal) {
-  DCHECK_NE(bytes, nullptr);
-  DCHECK_NE(decimal, nullptr);
-
-  auto& decimal_value(decimal->value);
-  int128_t::backend_type& backend(decimal_value.backend());
-  backend.resize(LIMBS_IN_INT128, LIMBS_IN_INT128);
-  std::memcpy(backend.limbs(), bytes, BYTES_IN_128_BITS);
-  if (is_negative) { decimal->value = -decimal->value; }
+void FromBytes(const uint8_t* bytes, Decimal128* decimal) {
+  decimal->value = Int128(bytes);
 }
 
 void ToBytes(const Decimal32& value, uint8_t** bytes) {
@@ -213,16 +218,10 @@ void ToBytes(const Decimal64& value, uint8_t** bytes) {
   *reinterpret_cast<int64_t*>(*bytes) = value.value;
 }
 
-void ToBytes(const Decimal128& decimal, uint8_t** bytes, bool* is_negative) {
+void ToBytes(const Decimal128& decimal, uint8_t** bytes) {
+  DCHECK_NE(bytes, nullptr);
   DCHECK_NE(*bytes, nullptr);
-  DCHECK_NE(is_negative, nullptr);
-
-  /// TODO(phillipc): boost multiprecision is unreliable here, int128_t can't be
-  /// roundtripped
-  const auto& backend(decimal.value.backend());
-  const size_t bytes_in_use = LIMB_SIZE * backend.size();
-  std::memcpy(*bytes, backend.limbs(), bytes_in_use);
-  *is_negative = backend.isneg();
+  decimal.value.ToBytes(bytes);
 }
 
 }  // namespace decimal

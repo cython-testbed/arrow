@@ -46,10 +46,12 @@ KeyValueMetadata::KeyValueMetadata() : keys_(), values_() {}
 
 KeyValueMetadata::KeyValueMetadata(
     const std::unordered_map<std::string, std::string>& map)
-    : keys_(UnorderedMapKeys(map)), values_(UnorderedMapValues(map)) {}
+    : keys_(UnorderedMapKeys(map)), values_(UnorderedMapValues(map)) {
+  DCHECK_EQ(keys_.size(), values_.size());
+}
 
-KeyValueMetadata::KeyValueMetadata(
-    const std::vector<std::string>& keys, const std::vector<std::string>& values)
+KeyValueMetadata::KeyValueMetadata(const std::vector<std::string>& keys,
+                                   const std::vector<std::string>& values)
     : keys_(keys), values_(values) {
   DCHECK_EQ(keys.size(), values.size());
 }

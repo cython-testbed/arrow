@@ -44,6 +44,11 @@ cdef class ChunkedArray:
         self.sp_chunked_array = chunked_array
         self.chunked_array = chunked_array.get()
 
+    property type:
+
+        def __get__(self):
+            return pyarrow_wrap_data_type(self.sp_chunked_array.get().type())
+
     cdef int _check_nullptr(self) except -1:
         if self.chunked_array == NULL:
             raise ReferenceError(
@@ -129,6 +134,16 @@ cdef class Column:
         self.sp_column = column
         self.column = column.get()
 
+    def __repr__(self):
+        from pyarrow.compat import StringIO
+        result = StringIO()
+        result.write(object.__repr__(self))
+        data = self.data
+        for i in range(len(data)):
+            result.write('\nchunk {0}: {1}'.format(i, repr(data.chunk(0))))
+
+        return result.getvalue()
+
     @staticmethod
     def from_array(object field_or_name, Array arr):
         cdef Field boxed_field
@@ -142,7 +157,7 @@ cdef class Column:
         sp_column.reset(new CColumn(boxed_field.sp_field, arr.sp_array))
         return pyarrow_wrap_column(sp_column)
 
-    def to_pandas(self):
+    def to_pandas(self, strings_to_categorical=False):
         """
         Convert the arrow::Column to a pandas.Series
 
@@ -152,9 +167,14 @@ cdef class Column:
         """
         cdef:
             PyObject* out
+            PandasOptions options
 
-        check_status(libarrow.ConvertColumnToPandas(self.sp_column,
-                                                    self, &out))
+        options = PandasOptions(strings_to_categorical=strings_to_categorical)
+
+        with nogil:
+            check_status(libarrow.ConvertColumnToPandas(options,
+                                                        self.sp_column,
+                                                        self, &out))
 
         return pd.Series(wrap_array_output(out), name=self.name)
 
@@ -277,84 +297,39 @@ cdef shared_ptr[const CKeyValueMetadata] unbox_metadata(dict metadata):
 cdef int _schema_from_arrays(
         arrays, names, dict metadata, shared_ptr[CSchema]* schema) except -1:
     cdef:
-        Array arr
         Column col
         c_string c_name
         vector[shared_ptr[CField]] fields
         shared_ptr[CDataType] type_
-        int K = len(arrays)
+        Py_ssize_t K = len(arrays)
 
     fields.resize(K)
 
     if len(arrays) == 0:
         raise ValueError('Must pass at least one array')
 
-    if isinstance(arrays[0], Array):
-        if names is None:
-            raise ValueError('Must pass names when constructing '
-                             'from Array objects')
-        for i in range(K):
-            arr = arrays[i]
-            type_ = arr.type.sp_type
-            c_name = tobytes(names[i])
-            fields[i].reset(new CField(c_name, type_, True))
-    elif isinstance(arrays[0], Column):
+    if isinstance(arrays[0], Column):
         for i in range(K):
             col = arrays[i]
             type_ = col.sp_column.get().type()
             c_name = tobytes(col.name)
             fields[i].reset(new CField(c_name, type_, True))
     else:
-        raise TypeError(type(arrays[0]))
+        if names is None:
+            raise ValueError('Must pass names when constructing '
+                             'from Array objects')
+        for i in range(K):
+            val = arrays[i]
+            if isinstance(val, (Array, ChunkedArray)):
+                type_ = (<DataType> val.type).sp_type
+            else:
+                raise TypeError(type(val))
+
+            c_name = tobytes(names[i])
+            fields[i].reset(new CField(c_name, type_, True))
 
     schema.reset(new CSchema(fields, unbox_metadata(metadata)))
     return 0
-
-
-cdef tuple _dataframe_to_arrays(
-    df,
-    bint timestamps_to_ms,
-    Schema schema,
-    bint preserve_index
-):
-    cdef:
-        list names = []
-        list arrays = []
-        list index_columns = []
-        list types = []
-        DataType type = None
-        Array array
-        dict metadata
-        Py_ssize_t i
-        Py_ssize_t n
-
-    if preserve_index:
-        n = len(getattr(df.index, 'levels', [df.index]))
-        index_columns.extend(df.index.get_level_values(i) for i in range(n))
-
-    for name in df.columns:
-        col = df[name]
-        if schema is not None:
-            field = schema.field_by_name(name)
-            type = getattr(field, "type", None)
-
-        array = Array.from_pandas(
-            col, type=type, timestamps_to_ms=timestamps_to_ms
-        )
-        arrays.append(array)
-        names.append(name)
-        types.append(array.type)
-
-    for i, column in enumerate(index_columns):
-        array = Array.from_pandas(column, timestamps_to_ms=timestamps_to_ms)
-        arrays.append(array)
-        names.append(pdcompat.index_level_name(column, i))
-        types.append(array.type)
-
-    metadata = pdcompat.construct_metadata(
-        df, index_columns, preserve_index, types
-    )
-    return names, arrays, metadata
 
 
 cdef class RecordBatch:
@@ -387,6 +362,30 @@ cdef class RecordBatch:
     def __len__(self):
         self._check_nullptr()
         return self.batch.num_rows()
+
+    def replace_schema_metadata(self, dict metadata=None):
+        """
+        EXPERIMENTAL: Create shallow copy of record batch by replacing schema
+        key-value metadata with the indicated new metadata (which may be None,
+        which deletes any existing metadata
+
+        Parameters
+        ----------
+        metadata : dict, default None
+
+        Returns
+        -------
+        shallow_copy : RecordBatch
+        """
+        cdef shared_ptr[CKeyValueMetadata] c_meta
+        if metadata is not None:
+            convert_metadata(metadata, &c_meta)
+
+        cdef shared_ptr[CRecordBatch] new_batch
+        with nogil:
+            new_batch = self.batch.ReplaceSchemaMetadata(c_meta)
+
+        return pyarrow_wrap_batch(new_batch)
 
     @property
     def num_columns(self):
@@ -446,8 +445,35 @@ cdef class RecordBatch:
             )
         return pyarrow_wrap_array(self.batch.column(i))
 
-    def __getitem__(self, i):
-        return self.column(i)
+    def __getitem__(self, key):
+        cdef:
+            Py_ssize_t start, stop
+        if isinstance(key, slice):
+            return _normalize_slice(self, key)
+        else:
+            return self.column(key)
+
+    def serialize(self, memory_pool=None):
+        """
+        Write RecordBatch to Buffer as encapsulated IPC message
+
+        Parameters
+        ----------
+        memory_pool : MemoryPool, default None
+            Uses default memory pool if not specified
+
+        Returns
+        -------
+        serialized : Buffer
+        """
+        cdef:
+            shared_ptr[CBuffer] buffer
+            CMemoryPool* pool = maybe_unbox_memory_pool(memory_pool)
+
+        with nogil:
+            check_status(SerializeRecordBatch(deref(self.batch),
+                                              pool, &buffer))
+        return pyarrow_wrap_buffer(buffer)
 
     def slice(self, offset=0, length=None):
         """
@@ -506,7 +532,6 @@ cdef class RecordBatch:
             entries.append((name, column))
         return OrderedDict(entries)
 
-
     def to_pandas(self, nthreads=None):
         """
         Convert the arrow::RecordBatch to a pandas DataFrame
@@ -536,7 +561,7 @@ cdef class RecordBatch:
         -------
         pyarrow.RecordBatch
         """
-        names, arrays, metadata = _dataframe_to_arrays(
+        names, arrays, metadata = pdcompat.dataframe_to_arrays(
             df, False, schema, preserve_index
         )
         return cls.from_arrays(arrays, names, metadata)
@@ -581,20 +606,22 @@ cdef class RecordBatch:
         return pyarrow_wrap_batch(batch)
 
 
-def table_to_blocks(Table table, int nthreads):
+def table_to_blocks(PandasOptions options, Table table, int nthreads,
+                    MemoryPool memory_pool):
     cdef:
         PyObject* result_obj
         shared_ptr[CTable] c_table = table.sp_table
+        CMemoryPool* pool
 
+    pool = maybe_unbox_memory_pool(memory_pool)
     with nogil:
         check_status(
             libarrow.ConvertTableToPandas(
-                c_table, nthreads, &result_obj
+                options, c_table, nthreads, pool, &result_obj
             )
         )
 
     return PyObject_to_object(result_obj)
-
 
 
 cdef class Table:
@@ -624,6 +651,30 @@ cdef class Table:
             )
         return 0
 
+    def replace_schema_metadata(self, dict metadata=None):
+        """
+        EXPERIMENTAL: Create shallow copy of table by replacing schema
+        key-value metadata with the indicated new metadata (which may be None,
+        which deletes any existing metadata
+
+        Parameters
+        ----------
+        metadata : dict, default None
+
+        Returns
+        -------
+        shallow_copy : Table
+        """
+        cdef shared_ptr[CKeyValueMetadata] c_meta
+        if metadata is not None:
+            convert_metadata(metadata, &c_meta)
+
+        cdef shared_ptr[CTable] new_table
+        with nogil:
+            new_table = self.table.ReplaceSchemaMetadata(c_meta)
+
+        return pyarrow_wrap_table(new_table)
+
     def equals(self, Table other):
         """
         Check if contents of two tables are equal
@@ -650,13 +701,8 @@ cdef class Table:
         return result
 
     @classmethod
-    def from_pandas(
-        cls,
-        df,
-        bint timestamps_to_ms=False,
-        Schema schema=None,
-        bint preserve_index=True
-    ):
+    def from_pandas(cls, df, bint timestamps_to_ms=False,
+                    Schema schema=None, bint preserve_index=True):
         """
         Convert pandas.DataFrame to an Arrow Table
 
@@ -690,7 +736,7 @@ cdef class Table:
         >>> pa.Table.from_pandas(df)
         <pyarrow.lib.Table object at 0x7f05d1fb1b40>
         """
-        names, arrays, metadata = _dataframe_to_arrays(
+        names, arrays, metadata = pdcompat.dataframe_to_arrays(
             df,
             timestamps_to_ms=timestamps_to_ms,
             schema=schema,
@@ -720,7 +766,7 @@ cdef class Table:
             vector[shared_ptr[CColumn]] columns
             shared_ptr[CSchema] schema
             shared_ptr[CTable] table
-            size_t K = len(arrays)
+            int i, K = <int> len(arrays)
 
         _schema_from_arrays(arrays, names, metadata, &schema)
 
@@ -732,6 +778,13 @@ cdef class Table:
                     make_shared[CColumn](
                         schema.get().field(i),
                         (<Array> arrays[i]).sp_array
+                    )
+                )
+            elif isinstance(arrays[i], ChunkedArray):
+                columns.push_back(
+                    make_shared[CColumn](
+                        schema.get().field(i),
+                        (<ChunkedArray> arrays[i]).sp_chunked_array
                     )
                 )
             elif isinstance(arrays[i], Column):
@@ -766,7 +819,8 @@ cdef class Table:
 
         return pyarrow_wrap_table(c_table)
 
-    def to_pandas(self, nthreads=None):
+    def to_pandas(self, nthreads=None, strings_to_categorical=False,
+                  memory_pool=None):
         """
         Convert the arrow::Table to a pandas DataFrame
 
@@ -776,16 +830,23 @@ cdef class Table:
             For the default, we divide the CPU count by 2 because most modern
             computers have hyperthreading turned on, so doubling the CPU count
             beyond the number of physical cores does not help
+        strings_to_categorical : boolean, default False
+            Encode string (UTF8) and binary types to pandas.Categorical
+        memory_pool: MemoryPool, optional
+            Specific memory pool to use to allocate casted columns
 
         Returns
         -------
         pandas.DataFrame
         """
+        cdef:
+            PandasOptions options
+        options = PandasOptions(strings_to_categorical=strings_to_categorical)
         self._check_nullptr()
         if nthreads is None:
             nthreads = cpu_count()
-
-        mgr = pdcompat.table_to_blockmanager(self, nthreads)
+        mgr = pdcompat.table_to_blockmanager(options, self, memory_pool,
+                                             nthreads)
         return pd.DataFrame(mgr)
 
     def to_pydict(self):
@@ -821,7 +882,7 @@ cdef class Table:
         self._check_nullptr()
         return pyarrow_wrap_schema(self.table.schema())
 
-    def column(self, int64_t i):
+    def column(self, int i):
         """
         Select a column by its numeric index.
 
@@ -835,8 +896,8 @@ cdef class Table:
         """
         cdef:
             Column column = Column()
-            int64_t num_columns = self.num_columns
-            int64_t index
+            int num_columns = self.num_columns
+            int index
 
         self._check_nullptr()
         if not -num_columns <= i < num_columns:
@@ -877,7 +938,8 @@ cdef class Table:
         """
         Number of rows in this table.
 
-        Due to the definition of a table, all columns have the same number of rows.
+        Due to the definition of a table, all columns have the same number of
+        rows.
 
         Returns
         -------
