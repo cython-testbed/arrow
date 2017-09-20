@@ -262,6 +262,26 @@ class HdfsTestCases(object):
                                .sort_values(by='index').reset_index(drop=True),
                                expected.to_pandas())
 
+    @test_parquet.parquet
+    def test_read_common_metadata_files(self):
+        tmpdir = pjoin(self.tmp_path, 'common-metadata-' + guid())
+        self.hdfs.mkdir(tmpdir)
+        test_parquet._test_read_common_metadata_files(self.hdfs, tmpdir)
+
+    @test_parquet.parquet
+    def test_write_to_dataset_with_partitions(self):
+        tmpdir = pjoin(self.tmp_path, 'write-partitions-' + guid())
+        self.hdfs.mkdir(tmpdir)
+        test_parquet._test_write_to_dataset_with_partitions(
+            tmpdir, filesystem=self.hdfs)
+
+    @test_parquet.parquet
+    def test_write_to_dataset_no_partitions(self):
+        tmpdir = pjoin(self.tmp_path, 'write-no_partitions-' + guid())
+        self.hdfs.mkdir(tmpdir)
+        test_parquet._test_write_to_dataset_no_partitions(
+            tmpdir, filesystem=self.hdfs)
+
 
 class TestLibHdfs(HdfsTestCases, unittest.TestCase):
 

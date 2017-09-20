@@ -51,6 +51,8 @@ If you are developing on Windows, see the [Windows developer guide][2].
 
 Simple debug build:
 
+    git clone https://github.com/apache/arrow.git
+    cd arrow/cpp
     mkdir debug
     cd debug
     cmake ..
@@ -58,6 +60,8 @@ Simple debug build:
 
 Simple release build:
 
+    git clone https://github.com/apache/arrow.git
+    cd arrow/cpp
     mkdir release
     cd release
     cmake .. -DCMAKE_BUILD_TYPE=Release
@@ -122,6 +126,9 @@ interfaces in this library as needed.
 The CUDA toolchain used to build the library can be customized by using the
 `$CUDA_HOME` environment variable.
 
+This library is still in Alpha stages, and subject to API changes without
+deprecation warnings.
+
 ### API documentation
 
 To generate the (html) API documentation, run the following command in the apidoc
@@ -168,11 +175,57 @@ constructors, the circumstances where they would are somewhat esoteric, and it
 is likely that an application would have encountered other more serious
 problems prior to having `std::bad_alloc` thrown in a constructor.
 
+### Extra debugging help
+
+If you use the CMake option `-DARROW_EXTRA_ERROR_CONTEXT=ON` it will compile
+the libraries with extra debugging information on error checks inside the
+`RETURN_NOT_OK` macro. In unit tests with `ASSERT_OK`, this will yield error
+outputs like:
+
+
+```
+../src/arrow/ipc/ipc-read-write-test.cc:609: Failure
+Failed
+NotImplemented: ../src/arrow/ipc/ipc-read-write-test.cc:574 code: writer->WriteRecordBatch(batch)
+../src/arrow/ipc/writer.cc:778 code: CheckStarted()
+../src/arrow/ipc/writer.cc:755 code: schema_writer.Write(&dictionaries_)
+../src/arrow/ipc/writer.cc:730 code: WriteSchema()
+../src/arrow/ipc/writer.cc:697 code: WriteSchemaMessage(schema_, dictionary_memo_, &schema_fb)
+../src/arrow/ipc/metadata-internal.cc:651 code: SchemaToFlatbuffer(fbb, schema, dictionary_memo, &fb_schema)
+../src/arrow/ipc/metadata-internal.cc:598 code: FieldToFlatbuffer(fbb, *schema.field(i), dictionary_memo, &offset)
+../src/arrow/ipc/metadata-internal.cc:508 code: TypeToFlatbuffer(fbb, *field.type(), &children, &layout, &type_enum, dictionary_memo, &type_offset)
+Unable to convert type: decimal(19, 4)
+```
+
 ### Deprecations and API Changes
 
 We use the compiler definition `ARROW_NO_DEPRECATED_API` to disable APIs that
 have been deprecated. It is a good practice to compile third party applications
 with this flag to proactively catch and account for API changes.
+
+### Keeping includes clean with include-what-you-use
+
+We have provided a `build-support/iwyu/iwyu.sh` convenience script for invoking
+Google's [include-what-you-use][4] tool, also known as IWYU. This includes
+various suppressions for more informative output. After building IWYU
+(following instructions in the README), you can run it on all files by running:
+
+```shell
+CC="clang-4.0" CXX="clang++-4.0" cmake -DCMAKE_EXPORT_COMPILE_COMMANDS=ON ..
+../build-support/iwyu/iwyu.sh all
+```
+
+This presumes that `include-what-you-use` and `iwyu_tool.py` are in your
+`$PATH`. If you compiled IWYU using a different version of clang, then
+substitute the version number above accordingly. The results of this script are
+logged to a temporary file, whose location can be found by examining the shell
+output:
+
+```
+...
+Logging IWYU to /tmp/arrow-cpp-iwyu.gT7XXV
+...
+```
 
 ## Continuous Integration
 
@@ -199,3 +252,4 @@ both of these options would be used rarely.  Current known uses-cases whent hey 
 [1]: https://brew.sh/
 [2]: https://github.com/apache/arrow/blob/master/cpp/apidoc/Windows.md
 [3]: https://google.github.io/styleguide/cppguide.html
+[4]: https://github.com/include-what-you-use/include-what-you-use

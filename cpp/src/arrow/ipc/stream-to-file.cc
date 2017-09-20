@@ -16,7 +16,9 @@
 // under the License.
 
 #include <iostream>
-#include "arrow/io/file.h"
+#include <memory>
+#include <string>
+
 #include "arrow/ipc/reader.h"
 #include "arrow/ipc/writer.h"
 #include "arrow/status.h"
@@ -24,6 +26,9 @@
 #include "arrow/util/io-util.h"
 
 namespace arrow {
+
+class RecordBatch;
+
 namespace ipc {
 
 // Converts a stream from stdin to a file written to standard out.
@@ -40,7 +45,7 @@ Status ConvertToFile() {
 
   std::shared_ptr<RecordBatch> batch;
   while (true) {
-    RETURN_NOT_OK(reader->ReadNextRecordBatch(&batch));
+    RETURN_NOT_OK(reader->ReadNext(&batch));
     if (batch == nullptr) break;
     RETURN_NOT_OK(writer->WriteRecordBatch(*batch));
   }

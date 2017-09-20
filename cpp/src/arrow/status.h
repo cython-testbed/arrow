@@ -15,9 +15,13 @@
 #ifndef ARROW_STATUS_H_
 #define ARROW_STATUS_H_
 
-#include <cstdint>
 #include <cstring>
+#include <iosfwd>
 #include <string>
+
+#ifdef ARROW_EXTRA_ERROR_CONTEXT
+#include <sstream>
+#endif
 
 #include "arrow/util/macros.h"
 #include "arrow/util/visibility.h"
@@ -45,6 +49,20 @@
 
 namespace arrow {
 
+#ifdef ARROW_EXTRA_ERROR_CONTEXT
+
+#define RETURN_NOT_OK(s)                                                            \
+  do {                                                                              \
+    Status _s = (s);                                                                \
+    if (ARROW_PREDICT_FALSE(!_s.ok())) {                                            \
+      std::stringstream ss;                                                         \
+      ss << __FILE__ << ":" << __LINE__ << " code: " << #s << "\n" << _s.message(); \
+      return Status(_s.code(), ss.str());                                           \
+    }                                                                               \
+  } while (0)
+
+#else
+
 #define RETURN_NOT_OK(s)                 \
   do {                                   \
     Status _s = (s);                     \
@@ -52,6 +70,8 @@ namespace arrow {
       return _s;                         \
     }                                    \
   } while (0)
+
+#endif  // ARROW_EXTRA_ERROR_CONTEXT
 
 #define RETURN_NOT_OK_ELSE(s, else_) \
   do {                               \
@@ -71,6 +91,8 @@ enum class StatusCode : char {
   IOError = 5,
   UnknownError = 9,
   NotImplemented = 10,
+  SerializationError = 11,
+  PythonError = 12,
   PlasmaObjectExists = 20,
   PlasmaObjectNonexistent = 21,
   PlasmaStoreFull = 22
@@ -125,6 +147,10 @@ class ARROW_EXPORT Status {
     return Status(StatusCode::IOError, msg);
   }
 
+  static Status SerializationError(const std::string& msg) {
+    return Status(StatusCode::SerializationError, msg);
+  }
+
   static Status PlasmaObjectExists(const std::string& msg) {
     return Status(StatusCode::PlasmaObjectExists, msg);
   }
@@ -147,6 +173,10 @@ class ARROW_EXPORT Status {
   bool IsTypeError() const { return code() == StatusCode::TypeError; }
   bool IsUnknownError() const { return code() == StatusCode::UnknownError; }
   bool IsNotImplemented() const { return code() == StatusCode::NotImplemented; }
+  // An object could not be serialized or deserialized.
+  bool IsSerializationError() const { return code() == StatusCode::SerializationError; }
+  // An error is propagated from a nested Python function.
+  bool IsPythonError() const { return code() == StatusCode::PythonError; }
   // An object with this object ID already exists in the plasma store.
   bool IsPlasmaObjectExists() const { return code() == StatusCode::PlasmaObjectExists; }
   // An object was requested that doesn't exist in the plasma store.

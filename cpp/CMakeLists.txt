@@ -94,6 +94,14 @@ if("${CMAKE_SOURCE_DIR}" STREQUAL "${CMAKE_CURRENT_SOURCE_DIR}")
     "Exclude deprecated APIs from build"
     OFF)
 
+  option(ARROW_COMPUTE
+    "Build the Arrow Compute Modules"
+    ON)
+
+  option(ARROW_EXTRA_ERROR_CONTEXT
+    "Compile with extra error context (line numbers, code)"
+    OFF)
+
   option(ARROW_IPC
     "Build the Arrow IPC extensions"
     ON)
@@ -141,6 +149,10 @@ if("${CMAKE_SOURCE_DIR}" STREQUAL "${CMAKE_CURRENT_SOURCE_DIR}")
   option(ARROW_RPATH_ORIGIN
     "Build Arrow libraries with RATH set to \$ORIGIN"
     OFF)
+
+  option(ARROW_INSTALL_NAME_RPATH
+    "Build Arrow libraries with install_name set to @rpath"
+    ON)
 
   option(ARROW_PLASMA
     "Build the plasma object store along with Arrow"
@@ -219,6 +231,10 @@ include(BuildUtils)
 
 if (ARROW_NO_DEPRECATED_API)
   add_definitions(-DARROW_NO_DEPRECATED_API)
+endif()
+
+if (ARROW_EXTRA_ERROR_CONTEXT)
+  add_definitions(-DARROW_EXTRA_ERROR_CONTEXT)
 endif()
 
 include(SetupCxxFlags)
@@ -551,7 +567,7 @@ endif (UNIX)
 # "make format" and "make check-format" targets
 ############################################################
 
-set(CLANG_FORMAT_VERSION 3.9)
+set(CLANG_FORMAT_VERSION 4.0)
 
 # runs clang format and updates files in place.
 add_custom_target(format ${BUILD_SUPPORT_DIR}/run_clang_format.py
@@ -579,6 +595,13 @@ if (${CLANG_TIDY_FOUND})
   0 `find ${CMAKE_CURRENT_SOURCE_DIR}/src -name \\*.cc |grep -v -F -f ${CMAKE_CURRENT_SOURCE_DIR}/src/.clang-tidy-ignore | sed -e '/_generated/g'`)
 
 endif()
+
+############################################################
+# "make iwyu" target
+############################################################
+if(UNIX)
+  add_custom_target(iwyu ${BUILD_SUPPORT_DIR}/iwyu/iwyu.sh)
+endif(UNIX)
 
 ############################################################
 # Linker and Dependencies
@@ -712,17 +735,6 @@ endif()
 add_subdirectory(src/arrow)
 add_subdirectory(src/arrow/io)
 
-if (ARROW_GPU)
-  # IPC extensions required to build the GPU library
-  set(ARROW_IPC ON)
-  add_subdirectory(src/arrow/gpu)
-endif()
-
-if (ARROW_IPC)
-  add_subdirectory(src/arrow/ipc)
-  add_dependencies(arrow_dependencies metadata_fbs)
-endif()
-
 set(ARROW_SRCS
   src/arrow/array.cc
   src/arrow/buffer.cc
@@ -736,6 +748,9 @@ set(ARROW_SRCS
   src/arrow/type.cc
   src/arrow/visitor.cc
 
+  src/arrow/compute/cast.cc
+  src/arrow/compute/context.cc
+
   src/arrow/io/file.cc
   src/arrow/io/interfaces.cc
   src/arrow/io/memory.cc
@@ -744,9 +759,27 @@ set(ARROW_SRCS
   src/arrow/util/compression.cc
   src/arrow/util/cpu-info.cc
   src/arrow/util/decimal.cc
-  src/arrow/util/int128.cc
   src/arrow/util/key_value_metadata.cc
 )
+
+if (ARROW_COMPUTE)
+  add_subdirectory(src/arrow/compute)
+  set(ARROW_SRCS ${ARROW_SRCS}
+    src/arrow/compute/cast.cc
+    src/arrow/compute/context.cc
+  )
+endif()
+
+if (ARROW_GPU)
+  # IPC extensions required to build the GPU library
+  set(ARROW_IPC ON)
+  add_subdirectory(src/arrow/gpu)
+endif()
+
+if (ARROW_IPC)
+  add_subdirectory(src/arrow/ipc)
+  add_dependencies(arrow_dependencies metadata_fbs)
+endif()
 
 if (ARROW_WITH_BROTLI)
   add_definitions(-DARROW_WITH_BROTLI)

@@ -65,20 +65,24 @@ from pyarrow.lib import (null, bool_,
                          FloatValue, DoubleValue, ListValue,
                          BinaryValue, StringValue, FixedSizeBinaryValue,
                          DecimalValue,
-                         Date32Value, Date64Value, TimestampValue)
+                         Date32Value, Date64Value, TimestampValue,
+                         TimestampType)
 
 from pyarrow.lib import (HdfsFile, NativeFile, PythonFile,
-                         FixedSizeBufferOutputStream,
+                         FixedSizeBufferWriter,
                          Buffer, BufferReader, BufferOutputStream,
                          OSFile, MemoryMappedFile, memory_map,
-                         frombuffer,
+                         allocate_buffer, frombuffer,
                          memory_map, create_memory_map,
                          have_libhdfs, have_libhdfs3, MockOutputStream)
 
 from pyarrow.lib import (MemoryPool, total_allocated_bytes,
-                         set_memory_pool, default_memory_pool)
+                         set_memory_pool, default_memory_pool,
+                         log_memory_allocations)
+
 from pyarrow.lib import (ChunkedArray, Column, RecordBatch, Table,
                          concat_tables)
+
 from pyarrow.lib import (ArrowException,
                          ArrowKeyError,
                          ArrowInvalid,
@@ -86,13 +90,15 @@ from pyarrow.lib import (ArrowException,
                          ArrowMemoryError,
                          ArrowNotImplementedError,
                          ArrowTypeError,
+                         ArrowSerializationError,
                          PlasmaObjectExists)
 
 # Serialization
 from pyarrow.lib import (deserialize_from, deserialize,
                          serialize, serialize_to, read_serialized,
-                         SerializedPyObject,
-                         SerializationException, DeserializationException)
+                         SerializedPyObject, SerializationContext,
+                         SerializationCallbackError,
+                         DeserializationCallbackError)
 
 from pyarrow.filesystem import FileSystem, LocalFileSystem
 
@@ -133,6 +139,11 @@ def _plasma_store_entry_point():
 # Deprecations
 
 from pyarrow.util import _deprecate_class
+
+FixedSizeBufferOutputStream = (
+    _deprecate_class('FixedSizeBufferOutputStream',
+                     'FixedSizeBufferWriter',
+                     FixedSizeBufferWriter, '0.7.0'))
 
 # Backwards compatibility with pyarrow < 0.6.0
 HdfsClient = _deprecate_class('HdfsClient', 'pyarrow.hdfs.connect',

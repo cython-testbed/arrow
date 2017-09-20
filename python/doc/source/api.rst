@@ -158,6 +158,7 @@ Input / Output and Shared Memory
 .. autosummary::
    :toctree: generated/
 
+   allocate_buffer
    Buffer
    BufferReader
    BufferOutputStream
@@ -181,8 +182,8 @@ File Systems
 
 .. _api.ipc:
 
-Interprocess Communication and Serialization
---------------------------------------------
+Serialization and IPC
+---------------------
 
 .. autosummary::
    :toctree: generated/
@@ -207,11 +208,27 @@ Interprocess Communication and Serialization
    deserialize_from
    read_serialized
    SerializedPyObject
+   SerializationContext
+
+.. _api.feather:
+
+Feather Format
+~~~~~~~~~~~~~~
+
+.. currentmodule:: pyarrow.feather
 
 .. _api.memory_pool:
 
+.. autosummary::
+   :toctree: generated/
+
+   read_feather
+   write_feather
+
 Memory Pools
 ------------
+
+.. currentmodule:: pyarrow
 
 .. autosummary::
    :toctree: generated/
@@ -220,6 +237,7 @@ Memory Pools
    default_memory_pool
    total_allocated_bytes
    set_memory_pool
+   log_memory_allocations
 
 .. _api.type_classes:
 

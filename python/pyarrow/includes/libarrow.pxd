@@ -160,6 +160,12 @@ cdef extern from "arrow/api.h" namespace "arrow" nogil:
         CMutableBuffer(const uint8_t* data, int64_t size)
         uint8_t* mutable_data()
 
+    CStatus AllocateBuffer(CMemoryPool* pool, const int64_t size,
+                           shared_ptr[CBuffer]* out)
+
+    CStatus AllocateResizableBuffer(CMemoryPool* pool, const int64_t size,
+                                    shared_ptr[ResizableBuffer]* out)
+
     cdef cppclass ResizableBuffer(CBuffer):
         CStatus Resize(int64_t nbytes)
         CStatus Reserve(int64_t nbytes)
@@ -235,6 +241,13 @@ cdef extern from "arrow/api.h" namespace "arrow" nogil:
         shared_ptr[CSchema] AddMetadata(
             const shared_ptr[CKeyValueMetadata]& metadata)
         shared_ptr[CSchema] RemoveMetadata()
+
+    cdef cppclass PrettyPrintOptions:
+        int indent
+
+    CStatus PrettyPrint(const CSchema& schema,
+                        const PrettyPrintOptions& options,
+                        c_string* result)
 
     cdef cppclass CBooleanArray" arrow::BooleanArray"(CArray):
         c_bool Value(int i)
@@ -406,7 +419,7 @@ cdef extern from "arrow/api.h" namespace "arrow" nogil:
                               shared_ptr[CTable]* result)
 
 
-cdef extern from "arrow/io/interfaces.h" namespace "arrow::io" nogil:
+cdef extern from "arrow/io/api.h" namespace "arrow::io" nogil:
     enum FileMode" arrow::io::FileMode::type":
         FileMode_READ" arrow::io::FileMode::READ"
         FileMode_WRITE" arrow::io::FileMode::WRITE"
@@ -460,9 +473,6 @@ cdef extern from "arrow/io/interfaces.h" namespace "arrow::io" nogil:
     cdef cppclass FileSystem:
         CStatus Stat(const c_string& path, FileStatistics* stat)
 
-
-cdef extern from "arrow/io/file.h" namespace "arrow::io" nogil:
-
     cdef cppclass FileOutputStream(OutputStream):
         @staticmethod
         CStatus Open(const c_string& path, shared_ptr[FileOutputStream]* file)
@@ -492,8 +502,9 @@ cdef extern from "arrow/io/file.h" namespace "arrow::io" nogil:
 
         int file_descriptor()
 
+    # ----------------------------------------------------------------------
+    # HDFS
 
-cdef extern from "arrow/io/hdfs.h" namespace "arrow::io" nogil:
     CStatus HaveLibHdfs()
     CStatus HaveLibHdfs3()
 
@@ -561,8 +572,6 @@ cdef extern from "arrow/io/hdfs.h" namespace "arrow::io" nogil:
                               int64_t default_block_size,
                               shared_ptr[HdfsOutputStream]* handle)
 
-
-cdef extern from "arrow/io/memory.h" namespace "arrow::io" nogil:
     cdef cppclass CBufferReader \
             " arrow::io::BufferReader"(RandomAccessFile):
         CBufferReader(const shared_ptr[CBuffer]& buffer)
@@ -623,11 +632,13 @@ cdef extern from "arrow/ipc/api.h" namespace "arrow::ipc" nogil:
 
     cdef cppclass CRecordBatchWriter" arrow::ipc::RecordBatchWriter":
         CStatus Close()
-        CStatus WriteRecordBatch(const CRecordBatch& batch)
+        CStatus WriteRecordBatch(const CRecordBatch& batch,
+                                 c_bool allow_64bit)
+        CStatus WriteTable(const CTable& table)
 
     cdef cppclass CRecordBatchReader" arrow::ipc::RecordBatchReader":
         shared_ptr[CSchema] schema()
-        CStatus ReadNextRecordBatch(shared_ptr[CRecordBatch]* batch)
+        CStatus ReadNext(shared_ptr[CRecordBatch]* batch)
 
     cdef cppclass CRecordBatchStreamReader \
             " arrow::ipc::RecordBatchStreamReader"(CRecordBatchReader):
@@ -697,9 +708,6 @@ cdef extern from "arrow/ipc/api.h" namespace "arrow::ipc" nogil:
                             InputStream* stream,
                             shared_ptr[CRecordBatch]* out)
 
-
-cdef extern from "arrow/ipc/feather.h" namespace "arrow::ipc::feather" nogil:
-
     cdef cppclass CFeatherWriter" arrow::ipc::feather::TableWriter":
         @staticmethod
         CStatus Open(const shared_ptr[OutputStream]& stream,
@@ -726,6 +734,21 @@ cdef extern from "arrow/ipc/feather.h" namespace "arrow::ipc::feather" nogil:
 
         CStatus GetColumn(int i, shared_ptr[CColumn]* out)
         c_string GetColumnName(int i)
+
+
+cdef extern from "arrow/compute/api.h" namespace "arrow::compute" nogil:
+
+    cdef cppclass CFunctionContext" arrow::compute::FunctionContext":
+        CFunctionContext()
+        CFunctionContext(CMemoryPool* pool)
+
+    cdef cppclass CCastOptions" arrow::compute::CastOptions":
+        c_bool allow_int_overflow
+
+    CStatus Cast(CFunctionContext* context, const CArray& array,
+                 const shared_ptr[CDataType]& to_type,
+                 const CCastOptions& options,
+                 shared_ptr[CArray]* out)
 
 
 cdef extern from "arrow/python/api.h" namespace "arrow::py" nogil:
@@ -797,19 +820,18 @@ cdef extern from "arrow/python/api.h" namespace 'arrow::py' nogil:
         shared_ptr[CRecordBatch] batch
         vector[shared_ptr[CTensor]] tensors
 
-    CStatus SerializeObject(object sequence, CSerializedPyObject* out)
+    CStatus SerializeObject(object context, object sequence,
+                            CSerializedPyObject* out)
 
     CStatus WriteSerializedObject(const CSerializedPyObject& obj,
                                   OutputStream* dst)
 
-    CStatus DeserializeObject(const CSerializedPyObject& obj,
+    CStatus DeserializeObject(object context,
+                              const CSerializedPyObject& obj,
                               PyObject* base, PyObject** out)
 
     CStatus ReadSerializedObject(RandomAccessFile* src,
                                  CSerializedPyObject* out)
-
-    void set_serialization_callbacks(object serialize_callback,
-                                     object deserialize_callback)
 
 
 cdef extern from 'arrow/python/init.h':

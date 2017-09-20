@@ -60,9 +60,16 @@ class PlasmaStoreFull(ArrowException):
     pass
 
 
+class ArrowSerializationError(ArrowException):
+    pass
+
+
 cdef int check_status(const CStatus& status) nogil except -1:
     if status.ok():
         return 0
+
+    if status.IsPythonError():
+        return -1
 
     with gil:
         message = frombytes(status.message())
@@ -84,6 +91,8 @@ cdef int check_status(const CStatus& status) nogil except -1:
             raise PlasmaObjectNonexistent(message)
         elif status.IsPlasmaStoreFull():
             raise PlasmaStoreFull(message)
+        elif status.IsSerializationError():
+            raise ArrowSerializationError(message)
         else:
             message = frombytes(status.ToString())
             raise ArrowException(message)

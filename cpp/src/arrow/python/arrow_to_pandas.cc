@@ -260,7 +260,7 @@ class PandasBlock {
   int64_t* placement_data_;
 
  private:
-  DISALLOW_COPY_AND_ASSIGN(PandasBlock);
+  ARROW_DISALLOW_COPY_AND_ASSIGN(PandasBlock);
 };
 
 template <typename T>
@@ -519,7 +519,7 @@ inline Status ConvertListsLike(PandasOptions options, const std::shared_ptr<Colu
       ++out_values;
     }
 
-    chunk_offset += arr->length();
+    chunk_offset += arr->values()->length();
   }
 
   Py_XDECREF(numpy_array);
@@ -602,43 +602,13 @@ static Status ConvertTimes(PandasOptions options, const ChunkedArray& data,
   return Status::OK();
 }
 
-template <typename T>
-Status ValidateDecimalPrecision(int precision) {
-  constexpr static const int kMaximumPrecision =
-      decimal::DecimalPrecision<typename T::value_type>::maximum;
-  if (!(precision > 0 && precision <= kMaximumPrecision)) {
-    std::stringstream ss;
-    ss << "Invalid precision: " << precision << ". Minimum is 1, maximum is "
-       << kMaximumPrecision;
-    return Status::Invalid(ss.str());
-  }
-  return Status::OK();
-}
-
-template <typename T>
-Status RawDecimalToString(const uint8_t* bytes, int precision, int scale,
-                          std::string* result) {
-  DCHECK_NE(bytes, nullptr);
+static Status RawDecimalToString(const uint8_t* bytes, int precision, int scale,
+                                 std::string* result) {
   DCHECK_NE(result, nullptr);
-  RETURN_NOT_OK(ValidateDecimalPrecision<T>(precision));
-  T decimal;
-  decimal::FromBytes(bytes, &decimal);
-  *result = decimal::ToString(decimal, precision, scale);
+  Decimal128 decimal(bytes);
+  *result = decimal.ToString(precision, scale);
   return Status::OK();
 }
-
-template Status RawDecimalToString<decimal::Decimal32>(const uint8_t*, int, int,
-                                                       std::string*);
-template Status RawDecimalToString<decimal::Decimal64>(const uint8_t*, int, int,
-                                                       std::string*);
-template Status RawDecimalToString<decimal::Decimal128>(const uint8_t*, int, int,
-                                                        std::string*);
-
-#define RAW_DECIMAL_TO_STRING_CASE(bits, value, precision, scale, output)          \
-  case bits:                                                                       \
-    RETURN_NOT_OK(RawDecimalToString<decimal::Decimal##bits>((value), (precision), \
-                                                             (scale), (output)));  \
-    break;
 
 static Status ConvertDecimals(PandasOptions options, const ChunkedArray& data,
                               PyObject** out_values) {
@@ -654,7 +624,6 @@ static Status ConvertDecimals(PandasOptions options, const ChunkedArray& data,
     auto type(std::dynamic_pointer_cast<arrow::DecimalType>(arr->type()));
     const int precision = type->precision();
     const int scale = type->scale();
-    const int bit_width = type->bit_width();
 
     for (int64_t i = 0; i < arr->length(); ++i) {
       if (arr->IsNull(i)) {
@@ -663,16 +632,7 @@ static Status ConvertDecimals(PandasOptions options, const ChunkedArray& data,
       } else {
         const uint8_t* raw_value = arr->GetValue(i);
         std::string decimal_string;
-        switch (bit_width) {
-          RAW_DECIMAL_TO_STRING_CASE(32, raw_value, precision, scale, &decimal_string)
-          RAW_DECIMAL_TO_STRING_CASE(64, raw_value, precision, scale, &decimal_string)
-          RAW_DECIMAL_TO_STRING_CASE(128, raw_value, precision, scale, &decimal_string)
-          default: {
-            std::stringstream buf;
-            buf << "Invalid bit_width " << bit_width << " for decimal value";
-            return Status::Invalid(buf.str());
-          }
-        }
+        RETURN_NOT_OK(RawDecimalToString(raw_value, precision, scale, &decimal_string));
         RETURN_NOT_OK(DecimalFromString(Decimal, decimal_string, out_values++));
       }
     }
@@ -1231,7 +1191,7 @@ class DataFrameBlockCreator {
   Status CreateBlocks() {
     for (int i = 0; i < table_->num_columns(); ++i) {
       std::shared_ptr<Column> col = table_->column(i);
-      PandasBlock::type output_type;
+      PandasBlock::type output_type = PandasBlock::OBJECT;
       RETURN_NOT_OK(GetPandasBlockType(*col, options_, &output_type));
 
       int block_placement = 0;
@@ -1454,6 +1414,7 @@ class ArrowDeserializer {
   Visit(const Type& type) {
     constexpr int TYPE = Type::type_id;
     using traits = internal::arrow_traits<TYPE>;
+    using c_type = typename Type::c_type;
 
     typedef typename traits::T T;
 
@@ -1465,10 +1426,10 @@ class ArrowDeserializer {
 
     for (int c = 0; c < data_.num_chunks(); c++) {
       const auto& arr = static_cast<const PrimitiveArray&>(*data_.chunk(c));
-      auto in_values = reinterpret_cast<const T*>(arr.raw_values());
+      auto in_values = reinterpret_cast<const c_type*>(arr.raw_values());
 
       for (int64_t i = 0; i < arr.length(); ++i) {
-        *out_values++ = arr.IsNull(i) ? na_value : in_values[i] / kShift;
+        *out_values++ = arr.IsNull(i) ? na_value : static_cast<T>(in_values[i]) / kShift;
       }
     }
     return Status::OK();

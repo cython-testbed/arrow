@@ -23,8 +23,6 @@
 #include <cstdint>
 #include <memory>
 #include <string>
-#include <unordered_map>
-#include <vector>
 
 #include "arrow/status.h"
 #include "arrow/util/macros.h"
@@ -32,9 +30,7 @@
 
 namespace arrow {
 
-class Array;
 class Buffer;
-class Field;
 
 namespace io {
 
@@ -56,8 +52,6 @@ constexpr int kMaxNestingDepth = 64;
 // Read interface classes. We do not fully deserialize the flatbuffers so that
 // individual fields metadata can be retrieved from very large schema without
 //
-
-class Message;
 
 /// \brief An IPC message including metadata and body
 class ARROW_EXPORT Message {
@@ -123,7 +117,7 @@ class ARROW_EXPORT Message {
   class MessageImpl;
   std::unique_ptr<MessageImpl> impl_;
 
-  DISALLOW_COPY_AND_ASSIGN(Message);
+  ARROW_DISALLOW_COPY_AND_ASSIGN(Message);
 };
 
 ARROW_EXPORT std::string FormatMessageType(Message::Type type);

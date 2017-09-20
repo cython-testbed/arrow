@@ -22,7 +22,7 @@ import os
 import json
 import pytest
 
-from pyarrow.compat import guid, u
+from pyarrow.compat import guid, u, BytesIO
 from pyarrow.filesystem import LocalFileSystem
 import pyarrow as pa
 from .pandas_examples import dataframe_with_arrays, dataframe_with_lists
@@ -57,7 +57,7 @@ def test_single_pylist_column_roundtrip(tmpdir):
         filename = tmpdir.join('single_{}_column.parquet'
                                .format(dtype.__name__))
         data = [pa.array(list(map(dtype, range(5))))]
-        table = pa.Table.from_arrays(data, names=('a', 'b'))
+        table = pa.Table.from_arrays(data, names=['a'])
         _write_table(table, filename.strpath)
         table_read = _read_table(filename.strpath)
         for col_written, col_read in zip(table.itercolumns(),
@@ -109,6 +109,33 @@ def test_pandas_parquet_2_0_rountrip(tmpdir):
     assert b'pandas' in table_read.schema.metadata
 
     assert arrow_table.schema.metadata == table_read.schema.metadata
+
+    df_read = table_read.to_pandas()
+    tm.assert_frame_equal(df, df_read)
+
+
+@parquet
+def test_pandas_parquet_datetime_tz():
+    import pyarrow.parquet as pq
+
+    s = pd.Series([datetime.datetime(2017, 9, 6)])
+    s = s.dt.tz_localize('utc')
+
+    s.index = s
+
+    # Both a column and an index to hit both use cases
+    df = pd.DataFrame({'tz_aware': s,
+                       'tz_eastern': s.dt.tz_convert('US/Eastern')},
+                      index=s)
+
+    f = BytesIO()
+
+    arrow_table = pa.Table.from_pandas(df)
+
+    _write_table(arrow_table, f, coerce_timestamps='ms')
+    f.seek(0)
+
+    table_read = pq.read_pandas(f)
 
     df_read = table_read.to_pandas()
     tm.assert_frame_equal(df, df_read)
@@ -535,6 +562,10 @@ def test_date_time_types():
     _check_roundtrip(table, expected=expected, version='2.0',
                      use_deprecated_int96_timestamps=True)
 
+    # Check that setting flavor to 'spark' uses int96 timestamps
+    _check_roundtrip(table, expected=expected, version='2.0',
+                     flavor='spark')
+
     # Unsupported stuff
     def _assert_unsupported(array):
         table = pa.Table.from_arrays([array], ['unsupported'])
@@ -550,6 +581,18 @@ def test_date_time_types():
 
 
 @parquet
+def test_sanitized_spark_field_names():
+    a0 = pa.array([0, 1, 2, 3, 4])
+    name = 'prohib; ,\t{}'
+    table = pa.Table.from_arrays([a0], [name])
+
+    result = _roundtrip_table(table, flavor='spark')
+
+    expected_name = 'prohib______'
+    assert result.schema[0].name == expected_name
+
+
+@parquet
 def test_fixed_size_binary():
     t0 = pa.binary(10)
     data = [b'fooooooooo', None, b'barooooooo', b'quxooooooo']
@@ -560,15 +603,19 @@ def test_fixed_size_binary():
     _check_roundtrip(table)
 
 
-def _check_roundtrip(table, expected=None, **params):
+def _roundtrip_table(table, **params):
     buf = io.BytesIO()
     _write_table(table, buf, **params)
     buf.seek(0)
 
+    return _read_table(buf)
+
+
+def _check_roundtrip(table, expected=None, **params):
     if expected is None:
         expected = table
 
-    result = _read_table(buf)
+    result = _roundtrip_table(table, **params)
     assert result.equals(expected)
 
 
@@ -673,6 +720,25 @@ def test_read_single_row_group_with_column_subset():
     row_groups = [pf.read_row_group(i, columns=cols) for i in range(K)]
     result = pa.concat_tables(row_groups)
     tm.assert_frame_equal(df[cols], result.to_pandas())
+
+
+@parquet
+def test_scan_contents():
+    import pyarrow.parquet as pq
+
+    N, K = 10000, 4
+    df = alltypes_sample(size=N)
+    a_table = pa.Table.from_pandas(df)
+
+    buf = io.BytesIO()
+    _write_table(a_table, buf, row_group_size=N / K,
+                 compression='snappy', version='2.0')
+
+    buf.seek(0)
+    pf = pq.ParquetFile(buf)
+
+    assert pf.scan_contents() == 10000
+    assert pf.scan_contents(df.columns[:4]) == 10000
 
 
 @parquet
@@ -832,8 +898,7 @@ def _generate_partition_directories(fs, base_dir, partition_spec, df):
     _visit_level(base_dir, 0, [])
 
 
-@parquet
-def test_read_common_metadata_files(tmpdir):
+def _test_read_common_metadata_files(fs, base_path):
     import pyarrow.parquet as pq
 
     N = 100
@@ -842,24 +907,34 @@ def test_read_common_metadata_files(tmpdir):
         'values': np.random.randn(N)
     }, columns=['index', 'values'])
 
-    base_path = str(tmpdir)
     data_path = pjoin(base_path, 'data.parquet')
 
     table = pa.Table.from_pandas(df)
-    _write_table(table, data_path)
+
+    with fs.open(data_path, 'wb') as f:
+        _write_table(table, f)
 
     metadata_path = pjoin(base_path, '_metadata')
-    pq.write_metadata(table.schema, metadata_path)
+    with fs.open(metadata_path, 'wb') as f:
+        pq.write_metadata(table.schema, f)
 
-    dataset = pq.ParquetDataset(base_path)
+    dataset = pq.ParquetDataset(base_path, filesystem=fs)
     assert dataset.metadata_path == metadata_path
 
-    common_schema = pq.read_metadata(data_path).schema
+    with fs.open(data_path) as f:
+        common_schema = pq.read_metadata(f).schema
     assert dataset.schema.equals(common_schema)
 
     # handle list of one directory
-    dataset2 = pq.ParquetDataset([base_path])
+    dataset2 = pq.ParquetDataset([base_path], filesystem=fs)
     assert dataset2.schema.equals(dataset.schema)
+
+
+@parquet
+def test_read_common_metadata_files(tmpdir):
+    base_path = str(tmpdir)
+    fs = LocalFileSystem.get_instance()
+    _test_read_common_metadata_files(fs, base_path)
 
 
 @parquet
@@ -1138,3 +1213,90 @@ def test_read_non_existent_file(tmpdir):
         pq.read_table(path)
     except Exception as e:
         assert path in e.args[0]
+
+
+def _test_write_to_dataset_with_partitions(base_path, filesystem=None):
+    # ARROW-1400
+    import pyarrow.parquet as pq
+
+    output_df = pd.DataFrame({'group1': list('aaabbbbccc'),
+                              'group2': list('eefeffgeee'),
+                              'num': list(range(10)),
+                              'date': np.arange('2017-01-01', '2017-01-11',
+                                                dtype='datetime64[D]')})
+    cols = output_df.columns.tolist()
+    partition_by = ['group1', 'group2']
+    output_table = pa.Table.from_pandas(output_df)
+    pq.write_to_dataset(output_table, base_path, partition_by,
+                        filesystem=filesystem)
+    input_table = pq.ParquetDataset(base_path, filesystem=filesystem).read()
+    input_df = input_table.to_pandas()
+
+    # Read data back in and compare with original DataFrame
+    # Partitioned columns added to the end of the DataFrame when read
+    input_df_cols = input_df.columns.tolist()
+    assert partition_by == input_df_cols[-1 * len(partition_by):]
+
+    # Partitioned columns become 'categorical' dtypes
+    input_df = input_df[cols]
+    for col in partition_by:
+        output_df[col] = output_df[col].astype('category')
+    assert output_df.equals(input_df)
+
+
+def _test_write_to_dataset_no_partitions(base_path, filesystem=None):
+    # ARROW-1400
+    import pyarrow.parquet as pq
+
+    output_df = pd.DataFrame({'group1': list('aaabbbbccc'),
+                              'group2': list('eefeffgeee'),
+                              'num': list(range(10)),
+                              'date': np.arange('2017-01-01', '2017-01-11',
+                                                dtype='datetime64[D]')})
+    cols = output_df.columns.tolist()
+    output_table = pa.Table.from_pandas(output_df)
+
+    if filesystem is None:
+        filesystem = LocalFileSystem.get_instance()
+
+    # Without partitions, append files to root_path
+    n = 5
+    for i in range(n):
+        pq.write_to_dataset(output_table, base_path,
+                            filesystem=filesystem)
+    output_files = [file for file in filesystem.ls(base_path)
+                    if file.endswith(".parquet")]
+    assert len(output_files) == n
+
+    # Deduplicated incoming DataFrame should match
+    # original outgoing Dataframe
+    input_table = pq.ParquetDataset(base_path,
+                                    filesystem=filesystem).read()
+    input_df = input_table.to_pandas()
+    input_df = input_df.drop_duplicates()
+    input_df = input_df[cols]
+    assert output_df.equals(input_df)
+
+
+@parquet
+def test_write_to_dataset_with_partitions(tmpdir):
+    _test_write_to_dataset_with_partitions(str(tmpdir))
+
+
+@parquet
+def test_write_to_dataset_no_partitions(tmpdir):
+    _test_write_to_dataset_no_partitions(str(tmpdir))
+
+
+@pytest.mark.large_memory
+@parquet
+def test_large_table_int32_overflow():
+    size = np.iinfo('int32').max + 1
+
+    arr = np.ones(size, dtype='uint8')
+
+    parr = pa.Array.from_pandas(arr, type=pa.uint8())
+
+    table = pa.Table.from_arrays([parr], names=['one'])
+    f = io.BytesIO()
+    _write_table(table, f)

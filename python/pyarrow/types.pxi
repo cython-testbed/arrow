@@ -134,6 +134,16 @@ cdef class TimestampType(DataType):
             else:
                 return None
 
+    def to_pandas_dtype(self):
+        """
+        Return the NumPy dtype that would be used for storing this
+        """
+        if self.tz is None:
+            return _pandas_type_map[_Type_TIMESTAMP]
+        else:
+            # Return DatetimeTZ
+            return pdcompat.make_datetimetz(self.tz)
+
 
 cdef class Time32Type(DataType):
 
@@ -289,7 +299,6 @@ cdef class Schema:
         return self.schema.num_fields()
 
     def __getitem__(self, int i):
-
         cdef:
             Field result = Field()
             int num_fields = self.schema.num_fields()
@@ -307,6 +316,10 @@ cdef class Schema:
         result.type = pyarrow_wrap_data_type(result.field.type())
 
         return result
+
+    def __iter__(self):
+        for i in range(len(self)):
+            yield self[i]
 
     def _check_null(self):
         if self.schema == NULL:
@@ -423,7 +436,23 @@ cdef class Schema:
         return pyarrow_wrap_schema(new_schema)
 
     def __str__(self):
-        return frombytes(self.schema.ToString())
+        self._check_null()
+
+        cdef:
+            PrettyPrintOptions options
+            c_string result
+
+        options.indent = 0
+        with nogil:
+            check_status(PrettyPrint(deref(self.schema), options, &result))
+
+        printed = frombytes(result)
+        if self.metadata is not None:
+            import pprint
+            metadata_formatted = pprint.pformat(self.metadata)
+            printed += '\nmetadata\n--------\n' + metadata_formatted
+
+        return printed
 
     def __repr__(self):
         return self.__str__()
@@ -835,7 +864,7 @@ cpdef ListType list_(value_type):
     return out
 
 
-cpdef DictionaryType dictionary(DataType index_type, Array dictionary,
+cpdef DictionaryType dictionary(DataType index_type, Array dict_values,
                                 bint ordered=False):
     """
     Dictionary (categorical, or simply encoded) type
@@ -852,7 +881,7 @@ cpdef DictionaryType dictionary(DataType index_type, Array dictionary,
     cdef DictionaryType out = DictionaryType()
     cdef shared_ptr[CDataType] dict_type
     dict_type.reset(new CDictionaryType(index_type.sp_type,
-                                        dictionary.sp_array,
+                                        dict_values.sp_array,
                                         ordered == 1))
     out.init(dict_type)
     return out

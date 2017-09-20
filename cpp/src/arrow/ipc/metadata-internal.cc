@@ -17,22 +17,28 @@
 
 #include "arrow/ipc/metadata-internal.h"
 
-#include <algorithm>
 #include <cstdint>
+#include <cstring>
 #include <memory>
 #include <sstream>
 #include <string>
-#include <vector>
+#include <utility>
 
-#include "flatbuffers/flatbuffers.h"
+#include <flatbuffers/flatbuffers.h>
 
 #include "arrow/array.h"
 #include "arrow/buffer.h"
 #include "arrow/io/interfaces.h"
+#include "arrow/ipc/File_generated.h"
+#include "arrow/ipc/Message_generated.h"
+#include "arrow/ipc/Tensor_generated.h"
+#include "arrow/ipc/dictionary.h"
 #include "arrow/ipc/util.h"
 #include "arrow/status.h"
 #include "arrow/tensor.h"
 #include "arrow/type.h"
+#include "arrow/util/bit-util.h"
+#include "arrow/util/key_value_metadata.h"
 #include "arrow/util/logging.h"
 
 namespace arrow {
@@ -242,8 +248,11 @@ static Status TypeFromFlatbuffer(flatbuf::Type type, const void* type_data,
     case flatbuf::Type_Bool:
       *out = boolean();
       return Status::OK();
-    case flatbuf::Type_Decimal:
-      return Status::NotImplemented("Decimal");
+    case flatbuf::Type_Decimal: {
+      auto dec_type = static_cast<const flatbuf::Decimal*>(type_data);
+      *out = decimal(dec_type->precision(), dec_type->scale());
+      return Status::OK();
+    }
     case flatbuf::Type_Date: {
       auto date_type = static_cast<const flatbuf::Date*>(type_data);
       if (date_type->unit() == flatbuf::DateUnit_DAY) {
@@ -413,6 +422,12 @@ static Status TypeToFlatbuffer(FBB& fbb, const DataType& type,
         fb_timezone = fbb.CreateString(ts_type.timezone());
       }
       *offset = flatbuf::CreateTimestamp(fbb, fb_unit, fb_timezone).Union();
+    } break;
+    case Type::DECIMAL: {
+      const auto& dec_type = static_cast<const DecimalType&>(*value_type);
+      *out_type = flatbuf::Type_Decimal;
+      *offset =
+          flatbuf::CreateDecimal(fbb, dec_type.precision(), dec_type.scale()).Union();
     } break;
     case Type::LIST:
       *out_type = flatbuf::Type_List;

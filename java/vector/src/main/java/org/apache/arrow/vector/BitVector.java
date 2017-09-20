@@ -19,6 +19,7 @@
 package org.apache.arrow.vector;
 
 import org.apache.arrow.memory.BufferAllocator;
+import org.apache.arrow.memory.BaseAllocator;
 import org.apache.arrow.memory.OutOfMemoryException;
 import org.apache.arrow.vector.complex.reader.FieldReader;
 import org.apache.arrow.vector.holders.BitHolder;
@@ -43,7 +44,7 @@ public final class BitVector extends BaseDataValueVector implements FixedWidthVe
   private final Mutator mutator = new Mutator();
 
   int valueCount;
-  private int allocationSizeInBytes = INITIAL_VALUE_ALLOCATION;
+  private int allocationSizeInBytes = getSizeFromCount(INITIAL_VALUE_ALLOCATION);
   private int allocationMonitor = 0;
 
   public BitVector(String name, BufferAllocator allocator) {
@@ -175,7 +176,7 @@ public final class BitVector extends BaseDataValueVector implements FixedWidthVe
   @Override
   public void reset() {
     valueCount = 0;
-    allocationSizeInBytes = INITIAL_VALUE_ALLOCATION;
+    allocationSizeInBytes = getSizeFromCount(INITIAL_VALUE_ALLOCATION);
     allocationMonitor = 0;
     zeroVector();
     super.reset();
@@ -208,7 +209,14 @@ public final class BitVector extends BaseDataValueVector implements FixedWidthVe
    * Allocate new buffer with double capacity, and copy data into the new buffer. Replace vector's buffer with new buffer, and release old one
    */
   public void reAlloc() {
-    final long newAllocationSize = allocationSizeInBytes * 2L;
+    long baseSize  = allocationSizeInBytes;
+    final int currentBufferCapacity = data.capacity();
+    if (baseSize < (long)currentBufferCapacity) {
+      baseSize = (long)currentBufferCapacity;
+    }
+    long newAllocationSize = baseSize * 2L;
+    newAllocationSize = BaseAllocator.nextPowerOfTwo(newAllocationSize);
+
     if (newAllocationSize > MAX_ALLOCATION_SIZE) {
       throw new OversizedAllocationException("Requested amount of memory is more than max allowed allocation size");
     }
@@ -216,7 +224,7 @@ public final class BitVector extends BaseDataValueVector implements FixedWidthVe
     final int curSize = (int) newAllocationSize;
     final ArrowBuf newBuf = allocator.buffer(curSize);
     newBuf.setZero(0, newBuf.capacity());
-    newBuf.setBytes(0, data, 0, data.capacity());
+    newBuf.setBytes(0, data, 0, currentBufferCapacity);
     data.release();
     data = newBuf;
     allocationSizeInBytes = curSize;
@@ -276,9 +284,11 @@ public final class BitVector extends BaseDataValueVector implements FixedWidthVe
 
   public void splitAndTransferTo(int startIndex, int length, BitVector target) {
     assert startIndex + length <= valueCount;
-    int firstByte = getByteIndex(startIndex);
-    int byteSize = getSizeFromCount(length);
+    int firstByteSource = getByteIndex(startIndex);
+    int lastByteSource = getByteIndex(valueCount - 1);
+    int byteSizeTarget = getSizeFromCount(length);
     int offset = startIndex % 8;
+
     if (length > 0) {
       if (offset == 0) {
         target.clear();
@@ -286,30 +296,57 @@ public final class BitVector extends BaseDataValueVector implements FixedWidthVe
         if (target.data != null) {
           target.data.release();
         }
-        target.data = data.slice(firstByte, byteSize);
+        target.data = data.slice(firstByteSource, byteSizeTarget);
         target.data.retain(1);
-      } else {
+      }
+      else {
         // Copy data
         // When the first bit starts from the middle of a byte (offset != 0), copy data from src BitVector.
         // Each byte in the target is composed by a part in i-th byte, another part in (i+1)-th byte.
-        // The last byte copied to target is a bit tricky :
-        //   1) if length requires partly byte (length % 8 !=0), copy the remaining bits only.
-        //   2) otherwise, copy the last byte in the same way as to the prior bytes.
+
         target.clear();
-        target.allocateNew(length);
+        target.allocateNew(byteSizeTarget * 8);
+
         // TODO maybe do this one word at a time, rather than byte?
-        for (int i = 0; i < byteSize - 1; i++) {
-          target.data.setByte(i, (((this.data.getByte(firstByte + i) & 0xFF) >>> offset) + (this.data.getByte(firstByte + i + 1) << (8 - offset))));
+
+        for (int i = 0; i < byteSizeTarget - 1; i++) {
+          byte b1 = getBitsFromCurrentByte(this.data, firstByteSource + i, offset);
+          byte b2 = getBitsFromNextByte(this.data, firstByteSource + i + 1, offset);
+
+          target.data.setByte(i, (b1 + b2));
         }
-        if (length % 8 != 0) {
-          target.data.setByte(byteSize - 1, ((this.data.getByte(firstByte + byteSize - 1) & 0xFF) >>> offset));
-        } else {
-          target.data.setByte(byteSize - 1,
-              (((this.data.getByte(firstByte + byteSize - 1) & 0xFF) >>> offset) + (this.data.getByte(firstByte + byteSize) << (8 - offset))));
+
+        /* Copying the last piece is done in the following manner:
+         * if the source vector has 1 or more bytes remaining, we copy
+         * the last piece as a byte formed by shifting data
+         * from the current byte and the next byte.
+         *
+         * if the source vector has no more bytes remaining
+         * (we are at the last byte), we copy the last piece as a byte
+         * by shifting data from the current byte.
+         */
+        if((firstByteSource + byteSizeTarget - 1) < lastByteSource) {
+          byte b1 = getBitsFromCurrentByte(this.data, firstByteSource + byteSizeTarget - 1, offset);
+          byte b2 = getBitsFromNextByte(this.data, firstByteSource + byteSizeTarget, offset);
+
+          target.data.setByte(byteSizeTarget - 1, b1 + b2);
+        }
+        else {
+          byte b1 = getBitsFromCurrentByte(this.data, firstByteSource + byteSizeTarget - 1, offset);
+
+          target.data.setByte(byteSizeTarget - 1, b1);
         }
       }
     }
     target.getMutator().setValueCount(length);
+  }
+
+  private static byte getBitsFromCurrentByte(ArrowBuf data, int index, int offset) {
+    return (byte)((data.getByte(index) & 0xFF) >>> offset);
+  }
+
+  private static byte getBitsFromNextByte(ArrowBuf data, int index, int offset) {
+    return (byte)((data.getByte(index) << (8 - offset)));
   }
 
   private class TransferImpl implements TransferPair {

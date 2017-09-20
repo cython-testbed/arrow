@@ -17,12 +17,10 @@
 
 #include "arrow/ipc/feather.h"
 
-#include <algorithm>
 #include <cstdint>
 #include <cstring>
-#include <iostream>
 #include <memory>
-#include <sstream>
+#include <sstream>  // IWYU pragma: keep
 #include <string>
 #include <vector>
 
@@ -30,13 +28,16 @@
 
 #include "arrow/array.h"
 #include "arrow/buffer.h"
-#include "arrow/io/file.h"
+#include "arrow/io/interfaces.h"
 #include "arrow/ipc/feather-internal.h"
 #include "arrow/ipc/feather_generated.h"
+#include "arrow/ipc/util.h"  // IWYU pragma: keep
 #include "arrow/status.h"
 #include "arrow/table.h"
+#include "arrow/type.h"
 #include "arrow/util/bit-util.h"
 #include "arrow/util/logging.h"
+#include "arrow/visitor.h"
 
 namespace arrow {
 namespace ipc {
@@ -367,7 +368,10 @@ class TableReader::TableReaderImpl {
     }
 
     buffers.push_back(SliceBuffer(buffer, offset, buffer->size() - offset));
-    return MakePrimitiveArray(type, buffers, meta->length(), meta->null_count(), 0, out);
+
+    auto arr_data =
+        std::make_shared<ArrayData>(type, meta->length(), buffers, meta->null_count());
+    return MakeArray(arr_data, out);
   }
 
   bool HasDescription() const { return metadata_->HasDescription(); }

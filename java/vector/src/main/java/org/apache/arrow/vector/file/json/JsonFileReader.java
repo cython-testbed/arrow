@@ -39,6 +39,7 @@ import org.apache.arrow.vector.BitVector;
 import org.apache.arrow.vector.BufferBacked;
 import org.apache.arrow.vector.DateDayVector;
 import org.apache.arrow.vector.DateMilliVector;
+import org.apache.arrow.vector.DecimalVector;
 import org.apache.arrow.vector.FieldVector;
 import org.apache.arrow.vector.Float4Vector;
 import org.apache.arrow.vector.Float8Vector;
@@ -66,12 +67,12 @@ import org.apache.arrow.vector.ValueVector.Mutator;
 import org.apache.arrow.vector.VarBinaryVector;
 import org.apache.arrow.vector.VarCharVector;
 import org.apache.arrow.vector.VectorSchemaRoot;
-import org.apache.arrow.vector.complex.NullableMapVector;
 import org.apache.arrow.vector.dictionary.Dictionary;
 import org.apache.arrow.vector.dictionary.DictionaryProvider;
 import org.apache.arrow.vector.schema.ArrowVectorType;
 import org.apache.arrow.vector.types.pojo.Field;
 import org.apache.arrow.vector.types.pojo.Schema;
+import org.apache.arrow.vector.util.DecimalUtility;
 import org.apache.arrow.vector.util.DictionaryUtility;
 import org.apache.commons.codec.DecoderException;
 import org.apache.commons.codec.binary.Hex;
@@ -215,6 +216,11 @@ public class JsonFileReader implements AutoCloseable, DictionaryProvider {
     }
   }
 
+  /*
+   * TODO: This method doesn't load some vectors correctly. For instance, it doesn't initialize
+   * `lastSet` in ListVector, VarCharVector, NullableVarBinaryVector A better way of implementing
+   * this function is to use `loadFieldBuffers` methods in FieldVector.
+   */
   private void readVector(Field field, FieldVector vector) throws JsonParseException, IOException {
     List<ArrowVectorType> vectorTypes = field.getTypeLayout().getVectorTypes();
     List<BufferBacked> fieldInnerVectors = vector.getFieldInnerVectors();
@@ -229,20 +235,24 @@ public class JsonFileReader implements AutoCloseable, DictionaryProvider {
         throw new IllegalArgumentException("Expected field " + field.getName() + " but got " + name);
       }
       int count = readNextField("count", Integer.class);
+      vector.allocateNew();
+      vector.getMutator().setValueCount(count);
       for (int v = 0; v < vectorTypes.size(); v++) {
         ArrowVectorType vectorType = vectorTypes.get(v);
         BufferBacked innerVector = fieldInnerVectors.get(v);
         nextFieldIs(vectorType.getName());
         readToken(START_ARRAY);
         ValueVector valueVector = (ValueVector) innerVector;
-        valueVector.allocateNew();
-        Mutator mutator = valueVector.getMutator();
 
         int innerVectorCount = vectorType.equals(OFFSET) ? count + 1 : count;
+        valueVector.setInitialCapacity(innerVectorCount);
+        valueVector.allocateNew();
+
         for (int i = 0; i < innerVectorCount; i++) {
           parser.nextToken();
           setValueFromParser(valueVector, i);
         }
+        Mutator mutator = valueVector.getMutator();
         mutator.setValueCount(innerVectorCount);
         readToken(END_ARRAY);
       }
@@ -261,9 +271,6 @@ public class JsonFileReader implements AutoCloseable, DictionaryProvider {
           readVector(childField, childVector);
         }
         readToken(END_ARRAY);
-      }
-      if (vector instanceof NullableMapVector) {
-        ((NullableMapVector) vector).valueCount = count;
       }
     }
     readToken(END_OBJECT);
@@ -311,6 +318,12 @@ public class JsonFileReader implements AutoCloseable, DictionaryProvider {
         break;
       case FLOAT8:
         ((Float8Vector) valueVector).getMutator().set(i, parser.readValueAs(Double.class));
+        break;
+      case DECIMAL: {
+          DecimalVector decimalVector = ((DecimalVector) valueVector);
+          byte[] value = decodeHexSafe(parser.readValueAs(String.class));
+          DecimalUtility.writeByteArrayToArrowBuf(value, decimalVector.getBuffer(), i);
+        }
         break;
       case VARBINARY:
         ((VarBinaryVector) valueVector).getMutator().setSafe(i, decodeHexSafe(parser.readValueAs(String.class)));

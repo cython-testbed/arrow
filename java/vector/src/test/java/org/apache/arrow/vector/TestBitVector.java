@@ -21,6 +21,7 @@ package org.apache.arrow.vector;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertFalse;
 
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.memory.RootAllocator;
@@ -99,47 +100,330 @@ public class TestBitVector {
         }
       }
 
-      final TransferPair transferPair = sourceVector.getTransferPair(allocator);
-      final BitVector toVector = (BitVector) transferPair.getTo();
+      try (final BitVector toVector = new BitVector("toVector", allocator)) {
+        final TransferPair transferPair = sourceVector.makeTransferPair(toVector);
+        final BitVector.Accessor toAccessor = toVector.getAccessor();
+        final BitVector.Mutator toMutator = toVector.getMutator();
+
+        /*
+         * form test cases such that we cover:
+         *
+         * (1) the start index is exactly where a particular byte starts in the source bit vector
+         * (2) the start index is randomly positioned within a byte in the source bit vector
+         *    (2.1) the length is a multiple of 8
+         *    (2.2) the length is not a multiple of 8
+         */
+        final int[][] transferLengths = {{0, 8}, {8, 10}, {18, 0}, {18, 8}, {26, 0}, {26, 14}};
+
+        for (final int[] transferLength : transferLengths) {
+          final int start = transferLength[0];
+          final int length = transferLength[1];
+
+          transferPair.splitAndTransfer(start, length);
+
+          /* check the toVector output after doing splitAndTransfer */
+          for (int i = 0; i < length; i++) {
+            int actual = toAccessor.get(i);
+            int expected = sourceAccessor.get(start + i);
+            assertEquals("different data values not expected --> sourceVector index: " + (start + i) + " toVector index: " + i,
+                    expected, actual);
+          }
+        }
+      }
+    }
+  }
+
+  @Test
+  public void testSplitAndTransfer1() throws Exception {
+
+    try (final BitVector sourceVector = new BitVector("bitvector", allocator)) {
+      final BitVector.Mutator sourceMutator = sourceVector.getMutator();
+      final BitVector.Accessor sourceAccessor = sourceVector.getAccessor();
+
+      sourceVector.allocateNew(8190);
+
+      /* populate the bitvector */
+      for (int i = 0; i < 8190; i++) {
+        sourceMutator.set(i, 1);
+      }
+
+      sourceMutator.setValueCount(8190);
+
+      /* check the vector output */
+      for (int i = 0; i < 8190; i++) {
+        int result = sourceAccessor.get(i);
+        assertEquals(Integer.toString(1), Integer.toString(result));
+      }
+
+      try (final BitVector toVector = new BitVector("toVector", allocator)) {
+        final TransferPair transferPair = sourceVector.makeTransferPair(toVector);
+        final BitVector.Accessor toAccessor = toVector.getAccessor();
+        final BitVector.Mutator toMutator = toVector.getMutator();
+
+        final int[][] transferLengths = {{0, 4095}, {4095, 4095}};
+
+        for (final int[] transferLength : transferLengths) {
+          final int start = transferLength[0];
+          final int length = transferLength[1];
+
+          transferPair.splitAndTransfer(start, length);
+
+          /* check the toVector output after doing splitAndTransfer */
+          for (int i = 0; i < length; i++) {
+            int actual = toAccessor.get(i);
+            int expected = sourceAccessor.get(start + i);
+            assertEquals("different data values not expected --> sourceVector index: " + (start + i) + " toVector index: " + i,
+                    expected, actual);
+          }
+        }
+      }
+    }
+  }
+
+  @Test
+  public void testSplitAndTransfer2() throws Exception {
+
+    try (final BitVector sourceVector = new BitVector("bitvector", allocator)) {
+      final BitVector.Mutator sourceMutator = sourceVector.getMutator();
+      final BitVector.Accessor sourceAccessor = sourceVector.getAccessor();
+
+      sourceVector.allocateNew(32);
+
+      /* populate the bitvector */
+      for (int i = 0; i < 32; i++) {
+        if ((i & 1) == 1) {
+          sourceMutator.set(i, 1);
+        } else {
+          sourceMutator.set(i, 0);
+        }
+      }
+
+      sourceMutator.setValueCount(32);
+
+      /* check the vector output */
+      for (int i = 0; i < 32; i++) {
+        int result = sourceAccessor.get(i);
+        if ((i & 1) == 1) {
+          assertEquals(Integer.toString(1), Integer.toString(result));
+        } else {
+          assertEquals(Integer.toString(0), Integer.toString(result));
+        }
+      }
+
+      try (final BitVector toVector = new BitVector("toVector", allocator)) {
+        final TransferPair transferPair = sourceVector.makeTransferPair(toVector);
+        final BitVector.Accessor toAccessor = toVector.getAccessor();
+        final BitVector.Mutator toMutator = toVector.getMutator();
+
+        final int[][] transferLengths = {{5,22}, {5,24}, {5,25}, {5,27}, {0,31}, {5,7}, {2,3}};
+
+        for (final int[] transferLength : transferLengths) {
+          final int start = transferLength[0];
+          final int length = transferLength[1];
+
+          transferPair.splitAndTransfer(start, length);
+
+          /* check the toVector output after doing splitAndTransfer */
+          for (int i = 0; i < length; i++) {
+            int actual = toAccessor.get(i);
+            int expected = sourceAccessor.get(start + i);
+            assertEquals("different data values not expected --> sourceVector index: " + (start + i) + " toVector index: " + i,
+                    expected, actual);
+          }
+        }
+      }
+    }
+  }
+
+  @Test
+  public void testReallocAfterVectorTransfer1() {
+    try (final BitVector vector = new BitVector(EMPTY_SCHEMA_PATH, allocator)) {
+      vector.allocateNew(4096);
+      int valueCapacity = vector.getValueCapacity();
+      assertEquals(4096, valueCapacity);
+
+      final BitVector.Mutator mutator = vector.getMutator();
+      final BitVector.Accessor accessor = vector.getAccessor();
+
+      for (int i = 0; i < valueCapacity; i++) {
+        if ((i & 1) == 1) {
+          mutator.setToOne(i);
+        }
+      }
+
+      for (int i = 0; i < valueCapacity; i++) {
+        int val = accessor.get(i);
+        if ((i & 1) == 1) {
+          assertEquals("unexpected cleared bit at index: " + i, 1, val);
+        }
+        else {
+          assertEquals("unexpected set bit at index: " + i, 0, val);
+        }
+      }
+
+      /* trigger first realloc */
+      mutator.setSafeToOne(valueCapacity);
+      assertEquals(valueCapacity * 2, vector.getValueCapacity());
+
+      for (int i = valueCapacity; i < valueCapacity*2; i++) {
+        if ((i & 1) == 1) {
+          mutator.setToOne(i);
+        }
+      }
+
+      for (int i = 0; i < valueCapacity*2; i++) {
+        int val = accessor.get(i);
+        if (((i & 1) == 1) || (i == valueCapacity)) {
+          assertEquals("unexpected cleared bit at index: " + i, 1, val);
+        }
+        else {
+          assertEquals("unexpected set bit at index: " + i, 0, val);
+        }
+      }
+
+      /* trigger second realloc */
+      mutator.setSafeToOne(valueCapacity*2);
+      assertEquals(valueCapacity * 4, vector.getValueCapacity());
+
+      for (int i = valueCapacity*2; i < valueCapacity*4; i++) {
+        if ((i & 1) == 1) {
+          mutator.setToOne(i);
+        }
+      }
+
+      for (int i = 0; i < valueCapacity*4; i++) {
+        int val = accessor.get(i);
+        if (((i & 1) == 1) || (i == valueCapacity) || (i == valueCapacity*2)) {
+          assertEquals("unexpected cleared bit at index: " + i, 1, val);
+        }
+        else {
+          assertEquals("unexpected set bit at index: " + i, 0, val);
+        }
+      }
+
+      /* now transfer the vector */
+      TransferPair transferPair = vector.getTransferPair(allocator);
+      transferPair.transfer();
+      final BitVector toVector = (BitVector)transferPair.getTo();
       final BitVector.Accessor toAccessor = toVector.getAccessor();
       final BitVector.Mutator toMutator = toVector.getMutator();
 
-      /*
-       * form test cases such that we cover:
-       *
-       * (1) the start index is exactly where a particular byte starts in the source bit vector
-       * (2) the start index is randomly positioned within a byte in the source bit vector
-       *    (2.1) the length is a multiple of 8
-       *    (2.2) the length is not a multiple of 8
-       */
-      final int[][] transferLengths = {{0, 8},     /* (1) */
-          {8, 10},    /* (1) */
-          {18, 0},    /* zero length scenario */
-          {18, 8},    /* (2.1) */
-          {26, 0},    /* zero length scenario */
-          {26, 14}    /* (2.2) */
-      };
+      assertEquals(valueCapacity * 4, toVector.getValueCapacity());
 
-      for (final int[] transferLength : transferLengths) {
-        final int start = transferLength[0];
-        final int length = transferLength[1];
+      /* realloc the toVector */
+      toMutator.setSafeToOne(valueCapacity * 4);
 
-        transferPair.splitAndTransfer(start, length);
-
-        /* check the toVector output after doing splitAndTransfer */
-        for (int i = 0; i < length; i++) {
-          int result = toAccessor.get(i);
-          if ((i & 1) == 1) {
-            assertEquals(Integer.toString(1), Integer.toString(result));
-          } else {
-            assertEquals(Integer.toString(0), Integer.toString(result));
+      for (int i = 0; i < toVector.getValueCapacity(); i++) {
+        int val = toAccessor.get(i);
+        if (i <= valueCapacity * 4) {
+          if (((i & 1) == 1) || (i == valueCapacity) ||
+                  (i == valueCapacity*2) || (i == valueCapacity*4)) {
+            assertEquals("unexpected cleared bit at index: " + i, 1, val);
+          }
+          else {
+            assertEquals("unexpected set bit at index: " + i, 0, val);
           }
         }
-
-        toVector.clear();
+        else {
+          assertEquals("unexpected set bit at index: " + i, 0, val);
+        }
       }
 
-      sourceVector.close();
+      toVector.close();
+    }
+  }
+
+  @Test
+  public void testReallocAfterVectorTransfer2() {
+    try (final NullableBitVector vector = new NullableBitVector(EMPTY_SCHEMA_PATH, allocator)) {
+      vector.allocateNew(4096);
+      int valueCapacity = vector.getValueCapacity();
+      assertEquals(4096, valueCapacity);
+
+      final NullableBitVector.Mutator mutator = vector.getMutator();
+      final NullableBitVector.Accessor accessor = vector.getAccessor();
+
+      for (int i = 0; i < valueCapacity; i++) {
+        if ((i & 1) == 1) {
+          mutator.set(i, 1);
+        }
+      }
+
+      for (int i = 0; i < valueCapacity; i++) {
+        if ((i & 1) == 1) {
+          assertFalse("unexpected cleared bit at index: " + i, accessor.isNull(i));
+        }
+        else {
+          assertTrue("unexpected set bit at index: " + i, accessor.isNull(i));
+        }
+      }
+
+      /* trigger first realloc */
+      mutator.setSafe(valueCapacity, 1, 1);
+      assertEquals(valueCapacity * 2, vector.getValueCapacity());
+
+      for (int i = valueCapacity; i < valueCapacity*2; i++) {
+        if ((i & 1) == 1) {
+          mutator.set(i, 1);
+        }
+      }
+
+      for (int i = 0; i < valueCapacity*2; i++) {
+        if (((i & 1) == 1) || (i == valueCapacity)) {
+          assertFalse("unexpected cleared bit at index: " + i, accessor.isNull(i));
+        }
+        else {
+          assertTrue("unexpected set bit at index: " + i, accessor.isNull(i));
+        }
+      }
+
+      /* trigger second realloc */
+      mutator.setSafe(valueCapacity*2, 1, 1);
+      assertEquals(valueCapacity * 4, vector.getValueCapacity());
+
+      for (int i = valueCapacity*2; i < valueCapacity*4; i++) {
+        if ((i & 1) == 1) {
+          mutator.set(i, 1);
+        }
+      }
+
+      for (int i = 0; i < valueCapacity*4; i++) {
+        if (((i & 1) == 1) || (i == valueCapacity) || (i == valueCapacity*2)) {
+          assertFalse("unexpected cleared bit at index: " + i, accessor.isNull(i));
+        }
+        else {
+          assertTrue("unexpected set bit at index: " + i, accessor.isNull(i));
+        }
+      }
+
+      /* now transfer the vector */
+      TransferPair transferPair = vector.getTransferPair(allocator);
+      transferPair.transfer();
+      final NullableBitVector toVector = (NullableBitVector)transferPair.getTo();
+      final NullableBitVector.Accessor toAccessor = toVector.getAccessor();
+      final NullableBitVector.Mutator toMutator = toVector.getMutator();
+
+      assertEquals(valueCapacity * 4, toVector.getValueCapacity());
+
+      /* realloc the toVector */
+      toMutator.setSafe(valueCapacity * 4, 1, 1);
+
+      for (int i = 0; i < toVector.getValueCapacity(); i++) {
+        if (i <= valueCapacity * 4) {
+          if (((i & 1) == 1) || (i == valueCapacity) ||
+                  (i == valueCapacity*2) || (i == valueCapacity*4)) {
+            assertFalse("unexpected cleared bit at index: " + i, toAccessor.isNull(i));
+          }
+          else {
+            assertTrue("unexpected set bit at index: " + i, toAccessor.isNull(i));
+          }
+        }
+        else {
+          assertTrue("unexpected set bit at index: " + i, toAccessor.isNull(i));
+        }
+      }
+
+      toVector.close();
     }
   }
 

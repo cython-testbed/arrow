@@ -23,6 +23,7 @@
 #include <cstring>
 #include <memory>
 #include <string>
+#include <type_traits>
 
 #include "arrow/status.h"
 #include "arrow/util/bit-util.h"
@@ -32,7 +33,6 @@
 namespace arrow {
 
 class MemoryPool;
-class Status;
 
 // ----------------------------------------------------------------------
 // Buffer classes
@@ -98,7 +98,7 @@ class ARROW_EXPORT Buffer {
   std::shared_ptr<Buffer> parent_;
 
  private:
-  DISALLOW_COPY_AND_ASSIGN(Buffer);
+  ARROW_DISALLOW_COPY_AND_ASSIGN(Buffer);
 };
 
 /// \brief Create Buffer referencing std::string memory
@@ -213,6 +213,19 @@ class ARROW_EXPORT BufferBuilder {
       RETURN_NOT_OK(Resize(new_capacity));
     }
     UnsafeAppend(data, length);
+    return Status::OK();
+  }
+
+  template <size_t NBYTES>
+  Status Append(const std::array<uint8_t, NBYTES>& data) {
+    constexpr auto nbytes = static_cast<int64_t>(NBYTES);
+    if (capacity_ < nbytes + size_) {
+      int64_t new_capacity = BitUtil::NextPower2(nbytes + size_);
+      RETURN_NOT_OK(Resize(new_capacity));
+    }
+
+    std::copy(data.cbegin(), data.cend(), data_ + size_);
+    size_ += nbytes;
     return Status::OK();
   }
 
