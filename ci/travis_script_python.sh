@@ -69,7 +69,7 @@ flake8 --count pyarrow
 flake8 --count --config=.flake8.cython pyarrow
 
 pip install -r requirements.txt
-pip install --install-option="--no-cython-compile" https://github.com/cython/cython/archive/557fd54ae9308a087993ebc66be0c58bf7f33040.zip
+pip install --install-option="--no-cython-compile" https://github.com/cython/cython/archive/0.27rc1.zip
 python setup.py build_ext --with-parquet --with-plasma \
        install --single-version-externally-managed --record=record.text
 popd
