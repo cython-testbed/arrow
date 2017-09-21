@@ -38,7 +38,7 @@ which python
 conda install -y -q nomkl
 
 # Expensive dependencies install from Continuum package repo
-conda install -y -q pip numpy pandas cython flake8
+conda install -y -q pip numpy pandas flake8
 
 # Build C++ libraries
 pushd $ARROW_CPP_BUILD_DIR
