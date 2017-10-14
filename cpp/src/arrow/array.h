@@ -84,7 +84,7 @@ struct Decimal;
 /// input array and replace them with newly-allocated data, changing the output
 /// data type as well.
 struct ARROW_EXPORT ArrayData {
-  ArrayData() {}
+  ArrayData() : length(0) {}
 
   ArrayData(const std::shared_ptr<DataType>& type, int64_t length,
             int64_t null_count = kUnknownNullCount, int64_t offset = 0)
@@ -169,10 +169,17 @@ class ARROW_EXPORT Array {
  public:
   virtual ~Array() = default;
 
-  /// Determine if a slot is null. For inner loops. Does *not* boundscheck
+  /// \brief Return true if value at index is null. Does not boundscheck
   bool IsNull(int64_t i) const {
     return null_bitmap_data_ != nullptr &&
            BitUtil::BitNotSet(null_bitmap_data_, i + data_->offset);
+  }
+
+  /// \brief Return true if value at index is valid (not null). Does not
+  /// boundscheck
+  bool IsValid(int64_t i) const {
+    return null_bitmap_data_ != nullptr &&
+           BitUtil::GetBit(null_bitmap_data_, i + data_->offset);
   }
 
   /// Size in the number of elements this array contains.
@@ -444,6 +451,16 @@ class ARROW_EXPORT BinaryArray : public FlatArray {
     return raw_data_ + pos;
   }
 
+  /// \brief Get binary value as a std::string
+  ///
+  /// \param i the value index
+  /// \return the value copied into a std::string
+  std::string GetString(int64_t i) const {
+    int32_t length = 0;
+    const uint8_t* bytes = GetValue(i, &length);
+    return std::string(reinterpret_cast<const char*>(bytes), static_cast<size_t>(length));
+  }
+
   /// Note that this buffer does not account for any slice offset
   std::shared_ptr<Buffer> value_offsets() const { return data_->buffers[1]; }
 
@@ -593,6 +610,9 @@ class ARROW_EXPORT UnionArray : public Array {
 
   std::shared_ptr<Array> child(int pos) const;
 
+  /// Only use this while the UnionArray is in scope
+  const Array* UnsafeChild(int pos) const;
+
  protected:
   void SetData(const std::shared_ptr<ArrayData>& data);
 
@@ -672,24 +692,6 @@ ARROW_EXTERN_TEMPLATE NumericArray<TimestampType>;
 /// \return Status
 ARROW_EXPORT
 Status ValidateArray(const Array& array);
-
-#ifndef ARROW_NO_DEPRECATED_API
-// \deprecated Since 0.7.0
-
-/// Create new arrays for logical types that are backed by primitive arrays.
-ARROW_EXPORT
-Status MakePrimitiveArray(const std::shared_ptr<DataType>& type, int64_t length,
-                          const std::shared_ptr<Buffer>& data,
-                          const std::shared_ptr<Buffer>& null_bitmap, int64_t null_count,
-                          int64_t offset, std::shared_ptr<Array>* out);
-
-ARROW_EXPORT
-Status MakePrimitiveArray(const std::shared_ptr<DataType>& type,
-                          const std::vector<std::shared_ptr<Buffer>>& buffers,
-                          int64_t length, int64_t null_count, int64_t offset,
-                          std::shared_ptr<Array>* out);
-
-#endif
 
 }  // namespace arrow
 

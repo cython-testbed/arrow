@@ -42,6 +42,9 @@
 namespace arrow {
 namespace ipc {
 
+using internal::FileBlock;
+using internal::kArrowMagicBytes;
+
 // ----------------------------------------------------------------------
 // Record batch write path
 
@@ -201,7 +204,7 @@ class RecordBatchSerializer : public ArrayVisitor {
     // itself as an int32_t.
     std::shared_ptr<Buffer> metadata_fb;
     RETURN_NOT_OK(WriteMetadataMessage(batch.num_rows(), *body_length, &metadata_fb));
-    RETURN_NOT_OK(WriteMessage(*metadata_fb, dst, metadata_length));
+    RETURN_NOT_OK(internal::WriteMessage(*metadata_fb, dst, metadata_length));
 
 #ifndef NDEBUG
     RETURN_NOT_OK(dst->Tell(&current_position));
@@ -321,27 +324,32 @@ class RecordBatchSerializer : public ArrayVisitor {
     return Status::OK();
   }
 
+  Status Visit(const NullArray& array) override {
+    buffers_.push_back(nullptr);
+    return Status::OK();
+  }
+
 #define VISIT_FIXED_WIDTH(TYPE) \
   Status Visit(const TYPE& array) override { return VisitFixedWidth<TYPE>(array); }
 
-  VISIT_FIXED_WIDTH(Int8Array);
-  VISIT_FIXED_WIDTH(Int16Array);
-  VISIT_FIXED_WIDTH(Int32Array);
-  VISIT_FIXED_WIDTH(Int64Array);
-  VISIT_FIXED_WIDTH(UInt8Array);
-  VISIT_FIXED_WIDTH(UInt16Array);
-  VISIT_FIXED_WIDTH(UInt32Array);
-  VISIT_FIXED_WIDTH(UInt64Array);
-  VISIT_FIXED_WIDTH(HalfFloatArray);
-  VISIT_FIXED_WIDTH(FloatArray);
-  VISIT_FIXED_WIDTH(DoubleArray);
-  VISIT_FIXED_WIDTH(Date32Array);
-  VISIT_FIXED_WIDTH(Date64Array);
-  VISIT_FIXED_WIDTH(TimestampArray);
-  VISIT_FIXED_WIDTH(Time32Array);
-  VISIT_FIXED_WIDTH(Time64Array);
-  VISIT_FIXED_WIDTH(FixedSizeBinaryArray);
-  VISIT_FIXED_WIDTH(DecimalArray);
+  VISIT_FIXED_WIDTH(Int8Array)
+  VISIT_FIXED_WIDTH(Int16Array)
+  VISIT_FIXED_WIDTH(Int32Array)
+  VISIT_FIXED_WIDTH(Int64Array)
+  VISIT_FIXED_WIDTH(UInt8Array)
+  VISIT_FIXED_WIDTH(UInt16Array)
+  VISIT_FIXED_WIDTH(UInt32Array)
+  VISIT_FIXED_WIDTH(UInt64Array)
+  VISIT_FIXED_WIDTH(HalfFloatArray)
+  VISIT_FIXED_WIDTH(FloatArray)
+  VISIT_FIXED_WIDTH(DoubleArray)
+  VISIT_FIXED_WIDTH(Date32Array)
+  VISIT_FIXED_WIDTH(Date64Array)
+  VISIT_FIXED_WIDTH(TimestampArray)
+  VISIT_FIXED_WIDTH(Time32Array)
+  VISIT_FIXED_WIDTH(Time64Array)
+  VISIT_FIXED_WIDTH(FixedSizeBinaryArray)
+  VISIT_FIXED_WIDTH(DecimalArray)
 
 #undef VISIT_FIXED_WIDTH
 
@@ -486,8 +494,8 @@ class RecordBatchSerializer : public ArrayVisitor {
   // In some cases, intermediate buffers may need to be allocated (with sliced arrays)
   MemoryPool* pool_;
 
-  std::vector<FieldMetadata> field_nodes_;
-  std::vector<BufferMetadata> buffer_meta_;
+  std::vector<internal::FieldMetadata> field_nodes_;
+  std::vector<internal::BufferMetadata> buffer_meta_;
   std::vector<std::shared_ptr<Buffer>> buffers_;
 
   int64_t max_recursion_depth_;
@@ -588,8 +596,8 @@ Status WriteTensorHeader(const Tensor& tensor, io::OutputStream* dst,
                          int32_t* metadata_length, int64_t* body_length) {
   RETURN_NOT_OK(AlignStreamPosition(dst));
   std::shared_ptr<Buffer> metadata;
-  RETURN_NOT_OK(WriteTensorMessage(tensor, 0, &metadata));
-  return WriteMessage(*metadata, dst, metadata_length);
+  RETURN_NOT_OK(internal::WriteTensorMessage(tensor, 0, &metadata));
+  return internal::WriteMessage(*metadata, dst, metadata_length);
 }
 
 Status WriteTensor(const Tensor& tensor, io::OutputStream* dst, int32_t* metadata_length,
@@ -710,10 +718,10 @@ class SchemaWriter : public StreamBookKeeper {
 
   Status WriteSchema() {
     std::shared_ptr<Buffer> schema_fb;
-    RETURN_NOT_OK(WriteSchemaMessage(schema_, dictionary_memo_, &schema_fb));
+    RETURN_NOT_OK(internal::WriteSchemaMessage(schema_, dictionary_memo_, &schema_fb));
 
     int32_t metadata_length = 0;
-    RETURN_NOT_OK(WriteMessage(*schema_fb, sink_, &metadata_length));
+    RETURN_NOT_OK(internal::WriteMessage(*schema_fb, sink_, &metadata_length));
     RETURN_NOT_OK(UpdatePosition());
     DCHECK_EQ(0, position_ % 8) << "WriteSchema did not perform an aligned write";
     return Status::OK();
@@ -853,17 +861,6 @@ Status RecordBatchStreamWriter::Open(io::OutputStream* sink,
   return Status::OK();
 }
 
-#ifndef ARROW_NO_DEPRECATED_API
-Status RecordBatchStreamWriter::Open(io::OutputStream* sink,
-                                     const std::shared_ptr<Schema>& schema,
-                                     std::shared_ptr<RecordBatchStreamWriter>* out) {
-  // ctor is private
-  *out = std::shared_ptr<RecordBatchStreamWriter>(new RecordBatchStreamWriter());
-  (*out)->impl_.reset(new RecordBatchStreamWriterImpl(sink, schema));
-  return Status::OK();
-}
-#endif
-
 Status RecordBatchStreamWriter::Close() { return impl_->Close(); }
 
 // ----------------------------------------------------------------------
@@ -926,17 +923,6 @@ Status RecordBatchFileWriter::Open(io::OutputStream* sink,
   *out = result;
   return Status::OK();
 }
-
-#ifndef ARROW_NO_DEPRECATED_API
-Status RecordBatchFileWriter::Open(io::OutputStream* sink,
-                                   const std::shared_ptr<Schema>& schema,
-                                   std::shared_ptr<RecordBatchFileWriter>* out) {
-  // ctor is private
-  *out = std::shared_ptr<RecordBatchFileWriter>(new RecordBatchFileWriter());
-  (*out)->impl_.reset(new RecordBatchFileWriterImpl(sink, schema));
-  return Status::OK();
-}
-#endif
 
 Status RecordBatchFileWriter::WriteRecordBatch(const RecordBatch& batch,
                                                bool allow_64bit) {

@@ -34,11 +34,16 @@ source activate $CONDA_ENV_DIR
 python --version
 which python
 
-# faster builds, please
-conda install -y -q nomkl
-
-# Expensive dependencies install from Continuum package repo
-conda install -y -q pip numpy pandas flake8
+conda install -y -q pip \
+      nomkl \
+      cloudpickle \
+      numpy=1.13.1 \
+      pandas \
+      ipython \
+      matplotlib \
+      numpydoc \
+      sphinx \
+      sphinx_bootstrap_theme
 
 # Build C++ libraries
 pushd $ARROW_CPP_BUILD_DIR
@@ -62,11 +67,9 @@ popd
 # Other stuff pip install
 pushd $ARROW_PYTHON_DIR
 
-# Fail fast on style checks
-flake8 --count pyarrow
-
-# Check Cython files with some checks turned off
-flake8 --count --config=.flake8.cython pyarrow
+if [ "$PYTHON_VERSION" == "2.7" ]; then
+  pip install futures
+fi
 
 pip install -r requirements.txt
 pip install --install-option="--no-cython-compile" https://github.com/cython/cython/archive/0.27rc1.zip
@@ -87,7 +90,6 @@ python -m pytest -vv -r sxX -s $PYARROW_PATH --parquet
 if [ "$PYTHON_VERSION" == "3.6" ] && [ $TRAVIS_OS_NAME == "linux" ]; then
   # Build documentation once
   pushd $ARROW_PYTHON_DIR/doc
-  conda install -y -q --file=requirements.txt
   sphinx-build -b html -d _build/doctrees -W source _build/html
   popd
 fi

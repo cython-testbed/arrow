@@ -51,6 +51,9 @@ namespace flatbuf = org::apache::arrow::flatbuf;
 
 namespace ipc {
 
+using internal::FileBlock;
+using internal::kArrowMagicBytes;
+
 // ----------------------------------------------------------------------
 // Record batch read path
 
@@ -187,7 +190,12 @@ class ArrayLoader {
     return Status::OK();
   }
 
-  Status Visit(const NullType& type) { return Status::NotImplemented("null"); }
+  Status Visit(const NullType& type) {
+    out_->buffers.resize(1);
+    RETURN_NOT_OK(LoadCommon());
+    RETURN_NOT_OK(GetBuffer(context_->buffer_index++, &out_->buffers[0]));
+    return Status::OK();
+  }
 
   template <typename T>
   typename std::enable_if<std::is_base_of<FixedWidthType, T>::value &&
@@ -349,7 +357,6 @@ Status ReadDictionary(const Buffer& metadata, const DictionaryTypeMap& dictionar
       reinterpret_cast<const flatbuf::RecordBatch*>(dictionary_batch->data());
   RETURN_NOT_OK(
       ReadRecordBatch(batch_meta, dummy_schema, kMaxNestingDepth, file, &batch));
-
   if (batch->num_columns() != 1) {
     return Status::Invalid("Dictionary record batch must only contain one field");
   }
@@ -418,7 +425,7 @@ class RecordBatchStreamReader::RecordBatchStreamReaderImpl {
     RETURN_NOT_OK(
         ReadMessageAndValidate(message_reader_.get(), Message::SCHEMA, false, &message));
 
-    RETURN_NOT_OK(GetDictionaryTypes(message->header(), &dictionary_types_));
+    RETURN_NOT_OK(internal::GetDictionaryTypes(message->header(), &dictionary_types_));
 
     // TODO(wesm): In future, we may want to reconcile the ids in the stream with
     // those found in the schema
@@ -427,7 +434,7 @@ class RecordBatchStreamReader::RecordBatchStreamReaderImpl {
       RETURN_NOT_OK(ReadNextDictionary());
     }
 
-    return GetSchema(message->header(), dictionary_memo_, &schema_);
+    return internal::GetSchema(message->header(), dictionary_memo_, &schema_);
   }
 
   Status ReadNext(std::shared_ptr<RecordBatch>* batch) {
@@ -483,21 +490,6 @@ Status RecordBatchStreamReader::Open(const std::shared_ptr<io::InputStream>& str
   return Open(std::move(message_reader), out);
 }
 
-#ifndef ARROW_NO_DEPRECATED_API
-Status RecordBatchStreamReader::Open(std::unique_ptr<MessageReader> message_reader,
-                                     std::shared_ptr<RecordBatchStreamReader>* reader) {
-  // Private ctor
-  *reader = std::shared_ptr<RecordBatchStreamReader>(new RecordBatchStreamReader());
-  return (*reader)->impl_->Open(std::move(message_reader));
-}
-
-Status RecordBatchStreamReader::Open(const std::shared_ptr<io::InputStream>& stream,
-                                     std::shared_ptr<RecordBatchStreamReader>* out) {
-  std::unique_ptr<MessageReader> message_reader(new InputStreamMessageReader(stream));
-  return Open(std::move(message_reader), out);
-}
-#endif
-
 std::shared_ptr<Schema> RecordBatchStreamReader::schema() const {
   return impl_->schema();
 }
@@ -525,6 +517,13 @@ class RecordBatchFileReader::RecordBatchFileReaderImpl {
     std::shared_ptr<Buffer> buffer;
     int file_end_size = static_cast<int>(magic_size + sizeof(int32_t));
     RETURN_NOT_OK(file_->ReadAt(footer_offset_ - file_end_size, file_end_size, &buffer));
+
+    const int64_t expected_footer_size = magic_size + sizeof(int32_t);
+    if (buffer->size() < expected_footer_size) {
+      std::stringstream ss;
+      ss << "Unable to read " << expected_footer_size << "from end of file";
+      return Status::Invalid(ss.str());
+    }
 
     if (memcmp(buffer->data() + sizeof(int32_t), kArrowMagicBytes, magic_size)) {
       return Status::Invalid("Not an Arrow file");
@@ -592,7 +591,7 @@ class RecordBatchFileReader::RecordBatchFileReaderImpl {
   }
 
   Status ReadSchema() {
-    RETURN_NOT_OK(GetDictionaryTypes(footer_->schema(), &dictionary_fields_));
+    RETURN_NOT_OK(internal::GetDictionaryTypes(footer_->schema(), &dictionary_fields_));
 
     // Read all the dictionaries
     for (int i = 0; i < num_dictionaries(); ++i) {
@@ -615,7 +614,7 @@ class RecordBatchFileReader::RecordBatchFileReaderImpl {
     }
 
     // Get the schema
-    return GetSchema(footer_->schema(), *dictionary_memo_, &schema_);
+    return internal::GetSchema(footer_->schema(), *dictionary_memo_, &schema_);
   }
 
   Status Open(const std::shared_ptr<io::RandomAccessFile>& file, int64_t footer_offset) {
@@ -635,7 +634,6 @@ class RecordBatchFileReader::RecordBatchFileReaderImpl {
  private:
   io::RandomAccessFile* file_;
 
-  // Deprecated as of 0.7.0
   std::shared_ptr<io::RandomAccessFile> owned_file_;
 
   // The location where the Arrow file layout ends. May be the end of the file
@@ -724,13 +722,6 @@ Status ReadRecordBatch(const std::shared_ptr<Schema>& schema, io::InputStream* f
                          out);
 }
 
-// Deprecated
-Status ReadRecordBatch(const std::shared_ptr<Schema>& schema, int64_t offset,
-                       io::RandomAccessFile* file, std::shared_ptr<RecordBatch>* out) {
-  RETURN_NOT_OK(file->Seek(offset));
-  return ReadRecordBatch(schema, file, out);
-}
-
 Status ReadTensor(int64_t offset, io::RandomAccessFile* file,
                   std::shared_ptr<Tensor>* out) {
   // Respect alignment of Tensor messages (see WriteTensor)
@@ -744,8 +735,8 @@ Status ReadTensor(int64_t offset, io::RandomAccessFile* file,
   std::vector<int64_t> shape;
   std::vector<int64_t> strides;
   std::vector<std::string> dim_names;
-  RETURN_NOT_OK(
-      GetTensorMetadata(*message->metadata(), &type, &shape, &strides, &dim_names));
+  RETURN_NOT_OK(internal::GetTensorMetadata(*message->metadata(), &type, &shape, &strides,
+                                            &dim_names));
   *out = std::make_shared<Tensor>(type, message->body(), shape, strides, dim_names);
   return Status::OK();
 }

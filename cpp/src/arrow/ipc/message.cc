@@ -29,6 +29,7 @@
 #include "arrow/ipc/Schema_generated.h"
 #include "arrow/ipc/metadata-internal.h"
 #include "arrow/status.h"
+#include "arrow/util/logging.h"
 
 namespace arrow {
 namespace ipc {
@@ -43,7 +44,7 @@ class Message::MessageImpl {
     message_ = flatbuf::GetMessage(metadata_->data());
 
     // Check that the metadata version is supported
-    if (message_->version() < kMinMetadataVersion) {
+    if (message_->version() < internal::kMinMetadataVersion) {
       return Status::Invalid("Old metadata version not supported");
     }
 
@@ -165,7 +166,7 @@ Status Message::ReadFrom(const std::shared_ptr<Buffer>& metadata, io::InputStrea
 
 Status Message::SerializeTo(io::OutputStream* file, int64_t* output_length) const {
   int32_t metadata_length = 0;
-  RETURN_NOT_OK(WriteMessage(*metadata(), file, &metadata_length));
+  RETURN_NOT_OK(internal::WriteMessage(*metadata(), file, &metadata_length));
 
   *output_length = metadata_length;
 
@@ -194,8 +195,17 @@ std::string FormatMessageType(Message::Type type) {
 
 Status ReadMessage(int64_t offset, int32_t metadata_length, io::RandomAccessFile* file,
                    std::unique_ptr<Message>* message) {
+  DCHECK_GT(static_cast<size_t>(metadata_length), sizeof(int32_t));
+
   std::shared_ptr<Buffer> buffer;
   RETURN_NOT_OK(file->ReadAt(offset, metadata_length, &buffer));
+
+  if (buffer->size() < metadata_length) {
+    std::stringstream ss;
+    ss << "Expected to read " << metadata_length << " metadata bytes but got "
+       << buffer->size();
+    return Status::Invalid(ss.str());
+  }
 
   int32_t flatbuffer_size = *reinterpret_cast<const int32_t*>(buffer->data());
 

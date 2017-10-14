@@ -36,11 +36,15 @@ std::shared_ptr<Field> Field::AddMetadata(
   return std::make_shared<Field>(name_, type_, nullable_, metadata);
 }
 
+#ifndef ARROW_NO_DEPRECATED_API
+
 Status Field::AddMetadata(const std::shared_ptr<const KeyValueMetadata>& metadata,
                           std::shared_ptr<Field>* out) const {
   *out = AddMetadata(metadata);
   return Status::OK();
 }
+
+#endif
 
 std::shared_ptr<Field> Field::RemoveMetadata() const {
   return std::make_shared<Field>(name_, type_, nullable_);
@@ -78,14 +82,7 @@ std::string Field::ToString() const {
 
 DataType::~DataType() {}
 
-bool DataType::Equals(const DataType& other) const {
-  bool are_equal = false;
-  Status error = TypeEquals(*this, other, &are_equal);
-  if (!error.ok()) {
-    DCHECK(false) << "Types not comparable: " << error.ToString();
-  }
-  return are_equal;
-}
+bool DataType::Equals(const DataType& other) const { return TypeEquals(*this, other); }
 
 bool DataType::Equals(const std::shared_ptr<DataType>& other) const {
   if (!other) {
@@ -307,11 +304,15 @@ std::shared_ptr<Schema> Schema::AddMetadata(
   return std::make_shared<Schema>(fields_, metadata);
 }
 
+#ifndef ARROW_NO_DEPRECATED_API
+
 Status Schema::AddMetadata(const std::shared_ptr<const KeyValueMetadata>& metadata,
                            std::shared_ptr<Schema>* out) const {
   *out = AddMetadata(metadata);
   return Status::OK();
 }
+
+#endif
 
 std::shared_ptr<const KeyValueMetadata> Schema::metadata() const { return metadata_; }
 

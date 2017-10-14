@@ -134,12 +134,13 @@ struct PlatformFilename {
 };
 #endif
 
-static inline Status CheckOpenResult(int ret, int errno_actual,
-                                     const PlatformFilename& file_name) {
+static inline Status CheckFileOpResult(int ret, int errno_actual,
+                                       const PlatformFilename& file_name,
+                                       const std::string& opname) {
   if (ret == -1) {
-    // TODO: errno codes to strings
     std::stringstream ss;
-    ss << "Failed to open local file: " << file_name.string();
+    ss << "Failed to " << opname << " file: " << file_name.string();
+    ss << " , error: " << std::strerror(errno_actual);
     return Status::IOError(ss.str());
   }
   return Status::OK();
@@ -168,7 +169,7 @@ static inline Status FileOpenReadable(const PlatformFilename& file_name, int* fd
   errno_actual = errno;
 #endif
 
-  return CheckOpenResult(ret, errno_actual, file_name);
+  return CheckFileOpResult(ret, errno_actual, file_name, "open local");
 }
 
 static inline Status FileOpenWriteable(const PlatformFilename& file_name, bool write_only,
@@ -211,7 +212,7 @@ static inline Status FileOpenWriteable(const PlatformFilename& file_name, bool w
 
   ret = *fd = open(file_name.c_str(), oflag, ARROW_WRITE_SHMODE);
 #endif
-  return CheckOpenResult(ret, errno_actual, file_name);
+  return CheckFileOpResult(ret, errno_actual, file_name, "open local");
 }
 
 static inline Status FileTell(int fd, int64_t* pos) {
@@ -354,8 +355,13 @@ class OSFile {
   }
 
   Status Read(int64_t nbytes, int64_t* bytes_read, uint8_t* out) {
-    std::lock_guard<std::mutex> guard(lock_);
     return FileRead(fd_, out, nbytes, bytes_read);
+  }
+
+  Status ReadAt(int64_t position, int64_t nbytes, int64_t* bytes_read, uint8_t* out) {
+    std::lock_guard<std::mutex> guard(lock_);
+    RETURN_NOT_OK(Seek(position));
+    return Read(nbytes, bytes_read, out);
   }
 
   Status Seek(int64_t pos) {
@@ -382,6 +388,8 @@ class OSFile {
   int64_t size() const { return size_; }
 
   FileMode::type mode() const { return mode_; }
+
+  std::mutex& lock() { return lock_; }
 
  protected:
   Status SetFileName(const std::string& file_name) {
@@ -457,10 +465,24 @@ Status ReadableFile::Close() { return impl_->Close(); }
 Status ReadableFile::Tell(int64_t* pos) const { return impl_->Tell(pos); }
 
 Status ReadableFile::Read(int64_t nbytes, int64_t* bytes_read, uint8_t* out) {
+  std::lock_guard<std::mutex> guard(impl_->lock());
   return impl_->Read(nbytes, bytes_read, out);
 }
 
+Status ReadableFile::ReadAt(int64_t position, int64_t nbytes, int64_t* bytes_read,
+                            uint8_t* out) {
+  return impl_->ReadAt(position, nbytes, bytes_read, out);
+}
+
+Status ReadableFile::ReadAt(int64_t position, int64_t nbytes,
+                            std::shared_ptr<Buffer>* out) {
+  std::lock_guard<std::mutex> guard(impl_->lock());
+  RETURN_NOT_OK(Seek(position));
+  return impl_->ReadBuffer(nbytes, out);
+}
+
 Status ReadableFile::Read(int64_t nbytes, std::shared_ptr<Buffer>* out) {
+  std::lock_guard<std::mutex> guard(impl_->lock());
   return impl_->ReadBuffer(nbytes, out);
 }
 
@@ -589,6 +611,8 @@ class MemoryMappedFile::MemoryMap : public MutableBuffer {
 
   int fd() const { return file_->fd(); }
 
+  std::mutex& lock() { return file_->lock(); }
+
  private:
   std::unique_ptr<OSFile> file_;
   int64_t position_;
@@ -599,13 +623,21 @@ MemoryMappedFile::~MemoryMappedFile() {}
 
 Status MemoryMappedFile::Create(const std::string& path, int64_t size,
                                 std::shared_ptr<MemoryMappedFile>* out) {
+  int ret;
+  errno_t errno_actual;
   std::shared_ptr<FileOutputStream> file;
   RETURN_NOT_OK(FileOutputStream::Open(path, &file));
+
 #ifdef _MSC_VER
-  _chsize_s(file->file_descriptor(), static_cast<size_t>(size));
+  errno_actual = _chsize_s(file->file_descriptor(), static_cast<size_t>(size));
+  ret = errno_actual == 0 ? 0 : -1;
 #else
-  ftruncate(file->file_descriptor(), static_cast<size_t>(size));
+  ret = ftruncate(file->file_descriptor(), static_cast<size_t>(size));
+  errno_actual = errno;
 #endif
+
+  RETURN_NOT_OK(CheckFileOpResult(ret, errno_actual, PlatformFilename(path), "truncate"));
+
   RETURN_NOT_OK(file->Close());
   return MemoryMappedFile::Open(path, FileMode::READWRITE, out);
 }
@@ -662,10 +694,24 @@ Status MemoryMappedFile::Read(int64_t nbytes, std::shared_ptr<Buffer>* out) {
   return Status::OK();
 }
 
+Status MemoryMappedFile::ReadAt(int64_t position, int64_t nbytes, int64_t* bytes_read,
+                                uint8_t* out) {
+  std::lock_guard<std::mutex> guard(memory_map_->lock());
+  RETURN_NOT_OK(Seek(position));
+  return Read(nbytes, bytes_read, out);
+}
+
+Status MemoryMappedFile::ReadAt(int64_t position, int64_t nbytes,
+                                std::shared_ptr<Buffer>* out) {
+  std::lock_guard<std::mutex> guard(memory_map_->lock());
+  RETURN_NOT_OK(Seek(position));
+  return Read(nbytes, out);
+}
+
 bool MemoryMappedFile::supports_zero_copy() const { return true; }
 
 Status MemoryMappedFile::WriteAt(int64_t position, const uint8_t* data, int64_t nbytes) {
-  std::lock_guard<std::mutex> guard(lock_);
+  std::lock_guard<std::mutex> guard(memory_map_->lock());
 
   if (!memory_map_->opened() || !memory_map_->writable()) {
     return Status::IOError("Unable to write");
@@ -676,7 +722,7 @@ Status MemoryMappedFile::WriteAt(int64_t position, const uint8_t* data, int64_t 
 }
 
 Status MemoryMappedFile::Write(const uint8_t* data, int64_t nbytes) {
-  std::lock_guard<std::mutex> guard(lock_);
+  std::lock_guard<std::mutex> guard(memory_map_->lock());
 
   if (!memory_map_->opened() || !memory_map_->writable()) {
     return Status::IOError("Unable to write");

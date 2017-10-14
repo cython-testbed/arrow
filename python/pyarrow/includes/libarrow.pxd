@@ -63,7 +63,9 @@ cdef extern from "arrow/api.h" namespace "arrow" nogil:
 
         _Type_LIST" arrow::Type::LIST"
         _Type_STRUCT" arrow::Type::STRUCT"
+        _Type_UNION" arrow::Type::UNION"
         _Type_DICTIONARY" arrow::Type::DICTIONARY"
+        _Type_MAP" arrow::Type::MAP"
 
     enum TimeUnit" arrow::TimeUnit::type":
         TimeUnit_SECOND" arrow::TimeUnit::SECOND"
@@ -766,13 +768,10 @@ cdef extern from "arrow/python/api.h" namespace "arrow::py" nogil:
 
     CStatus NumPyDtypeToArrow(object dtype, shared_ptr[CDataType]* type)
 
-    CStatus PandasToArrow(CMemoryPool* pool, object ao, object mo,
-                          const shared_ptr[CDataType]& type,
-                          shared_ptr[CArray]* out)
-
-    CStatus PandasObjectsToArrow(CMemoryPool* pool, object ao, object mo,
-                                 const shared_ptr[CDataType]& type,
-                                 shared_ptr[CChunkedArray]* out)
+    CStatus NdarrayToArrow(CMemoryPool* pool, object ao, object mo,
+                           c_bool use_pandas_null_sentinels,
+                           const shared_ptr[CDataType]& type,
+                           shared_ptr[CChunkedArray]* out)
 
     CStatus NdarrayToTensor(CMemoryPool* pool, object ao,
                             shared_ptr[CTensor]* out)

@@ -42,6 +42,8 @@ ChunkedArray::ChunkedArray(const ArrayVector& chunks) : chunks_(chunks) {
   }
 }
 
+std::shared_ptr<DataType> ChunkedArray::type() const { return chunks_[0]->type(); }
+
 bool ChunkedArray::Equals(const ChunkedArray& other) const {
   if (length_ != other.length()) {
     return false;
@@ -105,10 +107,10 @@ Column::Column(const std::shared_ptr<Field>& field, const ArrayVector& chunks)
 
 Column::Column(const std::shared_ptr<Field>& field, const std::shared_ptr<Array>& data)
     : field_(field) {
-  if (data) {
-    data_ = std::make_shared<ChunkedArray>(ArrayVector({data}));
-  } else {
+  if (!data) {
     data_ = std::make_shared<ChunkedArray>(ArrayVector({}));
+  } else {
+    data_ = std::make_shared<ChunkedArray>(ArrayVector({data}));
   }
 }
 
@@ -153,13 +155,6 @@ Status Column::ValidateData() {
 // ----------------------------------------------------------------------
 // RecordBatch methods
 
-void AssertBatchValid(const RecordBatch& batch) {
-  Status s = batch.Validate();
-  if (!s.ok()) {
-    DCHECK(false) << s.ToString();
-  }
-}
-
 RecordBatch::RecordBatch(const std::shared_ptr<Schema>& schema, int64_t num_rows)
     : schema_(schema), num_rows_(num_rows) {
   boxed_columns_.resize(schema->num_fields());
@@ -199,6 +194,7 @@ std::shared_ptr<Array> RecordBatch::column(int i) const {
   if (!boxed_columns_[i]) {
     DCHECK(MakeArray(columns_[i], &boxed_columns_[i]).ok());
   }
+  DCHECK(boxed_columns_[i]);
   return boxed_columns_[i];
 }
 
@@ -506,12 +502,6 @@ Status MakeTable(const std::shared_ptr<Schema>& schema,
 // Base record batch reader
 
 RecordBatchReader::~RecordBatchReader() {}
-
-#ifndef ARROW_NO_DEPRECATED_API
-Status RecordBatchReader::ReadNextRecordBatch(std::shared_ptr<RecordBatch>* batch) {
-  return ReadNext(batch);
-}
-#endif
 
 // ----------------------------------------------------------------------
 // Convert a table to a sequence of record batches

@@ -142,7 +142,7 @@ TEST_F(TestArray, SliceRecomputeNullCount) {
   ASSERT_EQ(6, null_arr_sliced->null_count());
 }
 
-TEST_F(TestArray, TestIsNull) {
+TEST_F(TestArray, TestIsNullIsValid) {
   // clang-format off
   vector<uint8_t> null_bitmap = {1, 0, 1, 1, 0, 1, 0, 0,
                                  1, 0, 1, 1, 0, 1, 0, 0,
@@ -170,6 +170,7 @@ TEST_F(TestArray, TestIsNull) {
 
   for (size_t i = 0; i < null_bitmap.size(); ++i) {
     EXPECT_EQ(null_bitmap[i] != 0, !arr->IsNull(i)) << i;
+    EXPECT_EQ(null_bitmap[i] != 0, arr->IsValid(i)) << i;
   }
 }
 
@@ -283,7 +284,7 @@ class TestPrimitiveBuilder : public TestBuilder {
 
 #define PINT_DECL(CapType, c_type, LOWER, UPPER)    \
   struct P##CapType {                               \
-    PTYPE_DECL(CapType, c_type);                    \
+    PTYPE_DECL(CapType, c_type)                     \
     static void draw(int64_t N, vector<T>* draws) { \
       test::randint<T>(N, LOWER, UPPER, draws);     \
     }                                               \
@@ -291,7 +292,7 @@ class TestPrimitiveBuilder : public TestBuilder {
 
 #define PFLOAT_DECL(CapType, c_type, LOWER, UPPER)     \
   struct P##CapType {                                  \
-    PTYPE_DECL(CapType, c_type);                       \
+    PTYPE_DECL(CapType, c_type)                        \
     static void draw(int64_t N, vector<T>* draws) {    \
       test::random_real<T>(N, 0, LOWER, UPPER, draws); \
     }                                                  \
@@ -311,7 +312,7 @@ PFLOAT_DECL(Float, float, -1000, 1000);
 PFLOAT_DECL(Double, double, -1000, 1000);
 
 struct PBoolean {
-  PTYPE_DECL(Boolean, uint8_t);
+  PTYPE_DECL(Boolean, uint8_t)
 };
 
 template <>
@@ -377,8 +378,6 @@ TYPED_TEST_CASE(TestPrimitiveBuilder, Primitives);
 #define DECL_T() typedef typename TestFixture::T T;
 
 #define DECL_TYPE() typedef typename TestFixture::Type Type;
-
-#define DECL_ARRAYTYPE() typedef typename TestFixture::ArrayType ArrayType;
 
 TYPED_TEST(TestPrimitiveBuilder, TestInit) {
   DECL_TYPE();
@@ -1047,6 +1046,17 @@ TEST_F(TestBinaryArray, TestGetValue) {
   }
 }
 
+TEST_F(TestBinaryArray, TestGetString) {
+  for (size_t i = 0; i < expected_.size(); ++i) {
+    if (valid_bytes_[i] == 0) {
+      ASSERT_TRUE(strings_->IsNull(i));
+    } else {
+      std::string val = strings_->GetString(i);
+      ASSERT_EQ(0, std::memcmp(expected_[i].data(), val.c_str(), val.size()));
+    }
+  }
+}
+
 TEST_F(TestBinaryArray, TestEqualsEmptyStrings) {
   BinaryBuilder builder;
 
@@ -1200,7 +1210,7 @@ class TestFWBinaryArray : public ::testing::Test {
 };
 
 TEST_F(TestFWBinaryArray, Builder) {
-  const int32_t byte_width = 10;
+  constexpr int32_t byte_width = 10;
   int64_t length = 4096;
 
   int64_t nbytes = length * byte_width;
@@ -1215,8 +1225,7 @@ TEST_F(TestFWBinaryArray, Builder) {
 
   std::shared_ptr<Array> result;
 
-  auto CheckResult = [this, &length, &is_valid, &raw_data,
-                      &byte_width](const Array& result) {
+  auto CheckResult = [&length, &is_valid, &raw_data, byte_width](const Array& result) {
     // Verify output
     const auto& fw_result = static_cast<const FixedSizeBinaryArray&>(result);
 
@@ -1845,6 +1854,93 @@ TEST(TestFixedSizeBinaryDictionaryBuilder, InvalidTypeAppend) {
   ASSERT_OK(fsb_builder.Finish(&fsb_array));
 
   ASSERT_RAISES(Invalid, builder.AppendArray(*fsb_array));
+}
+
+TEST(TestDecimalDictionaryBuilder, Basic) {
+  // Build the dictionary Array
+  const auto& decimal_type = arrow::decimal(2, 0);
+  DictionaryBuilder<FixedSizeBinaryType> builder(decimal_type, default_memory_pool());
+
+  // Test data
+  std::vector<Decimal128> test{12, 12, 11, 12};
+  for (const auto& value : test) {
+    ASSERT_OK(builder.Append(value.ToBytes().data()));
+  }
+
+  std::shared_ptr<Array> result;
+  ASSERT_OK(builder.Finish(&result));
+
+  // Build expected data
+  FixedSizeBinaryBuilder decimal_builder(decimal_type);
+  ASSERT_OK(decimal_builder.Append(Decimal128(12).ToBytes()));
+  ASSERT_OK(decimal_builder.Append(Decimal128(11).ToBytes()));
+
+  std::shared_ptr<Array> decimal_array;
+  ASSERT_OK(decimal_builder.Finish(&decimal_array));
+  auto dtype = arrow::dictionary(int8(), decimal_array);
+
+  Int8Builder int_builder;
+  ASSERT_OK(int_builder.Append({0, 0, 1, 0}));
+  std::shared_ptr<Array> int_array;
+  ASSERT_OK(int_builder.Finish(&int_array));
+
+  DictionaryArray expected(dtype, int_array);
+  ASSERT_TRUE(expected.Equals(result));
+}
+
+TEST(TestDecimalDictionaryBuilder, DoubleTableSize) {
+  const auto& decimal_type = arrow::decimal(21, 0);
+
+  // Build the dictionary Array
+  DictionaryBuilder<FixedSizeBinaryType> builder(decimal_type, default_memory_pool());
+
+  // Build expected data
+  FixedSizeBinaryBuilder fsb_builder(decimal_type);
+  Int16Builder int_builder;
+
+  // Fill with 1024 different values
+  for (int64_t i = 0; i < 1024; i++) {
+    const uint8_t bytes[] = {0,
+                             0,
+                             0,
+                             0,
+                             0,
+                             0,
+                             0,
+                             0,
+                             0,
+                             0,
+                             0,
+                             0,
+                             12,
+                             12,
+                             static_cast<uint8_t>(i / 128),
+                             static_cast<uint8_t>(i % 128)};
+    ASSERT_OK(builder.Append(bytes));
+    ASSERT_OK(fsb_builder.Append(bytes));
+    ASSERT_OK(int_builder.Append(static_cast<uint16_t>(i)));
+  }
+  // Fill with an already existing value
+  const uint8_t known_value[] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 12, 12, 0, 1};
+  for (int64_t i = 0; i < 1024; i++) {
+    ASSERT_OK(builder.Append(known_value));
+    ASSERT_OK(int_builder.Append(1));
+  }
+
+  // Finalize result
+  std::shared_ptr<Array> result;
+  ASSERT_OK(builder.Finish(&result));
+
+  // Finalize expected data
+  std::shared_ptr<Array> fsb_array;
+  ASSERT_OK(fsb_builder.Finish(&fsb_array));
+
+  auto dtype = std::make_shared<DictionaryType>(int16(), fsb_array);
+  std::shared_ptr<Array> int_array;
+  ASSERT_OK(int_builder.Finish(&int_array));
+
+  DictionaryArray expected(dtype, int_array);
+  ASSERT_TRUE(expected.Equals(result));
 }
 
 // ----------------------------------------------------------------------

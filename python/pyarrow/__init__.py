@@ -37,7 +37,7 @@ from pyarrow.lib import (null, bool_,
                          float16, float32, float64,
                          binary, string, decimal,
                          list_, struct, dictionary, field,
-                         DataType, NAType,
+                         type_for_alias, DataType, NAType,
                          Field,
                          Schema,
                          schema,
@@ -65,8 +65,7 @@ from pyarrow.lib import (null, bool_,
                          FloatValue, DoubleValue, ListValue,
                          BinaryValue, StringValue, FixedSizeBinaryValue,
                          DecimalValue,
-                         Date32Value, Date64Value, TimestampValue,
-                         TimestampType)
+                         Date32Value, Date64Value, TimestampValue)
 
 from pyarrow.lib import (HdfsFile, NativeFile, PythonFile,
                          FixedSizeBufferWriter,
@@ -117,6 +116,10 @@ from pyarrow.ipc import (Message, MessageReader,
 
 localfs = LocalFileSystem.get_instance()
 
+from pyarrow.serialization import _default_serialization_context
+
+import pyarrow.types as types
+
 # Entry point for starting the plasma store
 
 def _plasma_store_entry_point():
@@ -138,13 +141,4 @@ def _plasma_store_entry_point():
 # ----------------------------------------------------------------------
 # Deprecations
 
-from pyarrow.util import _deprecate_class
-
-FixedSizeBufferOutputStream = (
-    _deprecate_class('FixedSizeBufferOutputStream',
-                     'FixedSizeBufferWriter',
-                     FixedSizeBufferWriter, '0.7.0'))
-
-# Backwards compatibility with pyarrow < 0.6.0
-HdfsClient = _deprecate_class('HdfsClient', 'pyarrow.hdfs.connect',
-                              hdfs.connect, '0.6.0')
+from pyarrow.util import _deprecate_class  # noqa

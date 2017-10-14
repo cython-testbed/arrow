@@ -108,9 +108,18 @@ class ARROW_EXPORT ArrayBuilder {
 
   std::shared_ptr<PoolBuffer> null_bitmap() const { return null_bitmap_; }
 
-  /// Creates new Array object to hold the contents of the builder and transfers
-  /// ownership of the data.  This resets all variables on the builder.
-  virtual Status Finish(std::shared_ptr<Array>* out) = 0;
+  /// \brief Return result of builder as an internal generic ArrayData
+  /// object. Resets builder
+  ///
+  /// \param[out] out the finalized ArrayData object
+  /// \return Status
+  virtual Status FinishInternal(std::shared_ptr<ArrayData>* out) = 0;
+
+  /// \brief Return result of builder as an Array object. Resets builder
+  ///
+  /// \param[out] out the finalized Array object
+  /// \return Status
+  Status Finish(std::shared_ptr<Array>* out);
 
   std::shared_ptr<DataType> type() const { return type_; }
 
@@ -170,7 +179,7 @@ class ARROW_EXPORT NullBuilder : public ArrayBuilder {
     return Status::OK();
   }
 
-  Status Finish(std::shared_ptr<Array>* out) override;
+  Status FinishInternal(std::shared_ptr<ArrayData>* out) override;
 };
 
 template <typename Type>
@@ -180,11 +189,6 @@ class ARROW_EXPORT PrimitiveBuilder : public ArrayBuilder {
 
   explicit PrimitiveBuilder(const std::shared_ptr<DataType>& type, MemoryPool* pool)
       : ArrayBuilder(type, pool), data_(nullptr), raw_data_(nullptr) {}
-
-#ifndef ARROW_NO_DEPRECATED_API
-  explicit PrimitiveBuilder(MemoryPool* pool, const std::shared_ptr<DataType>& type)
-      : PrimitiveBuilder(type, pool) {}
-#endif
 
   using ArrayBuilder::Advance;
 
@@ -233,7 +237,7 @@ class ARROW_EXPORT PrimitiveBuilder : public ArrayBuilder {
   /// \return Status
   Status Append(const std::vector<value_type>& values);
 
-  Status Finish(std::shared_ptr<Array>* out) override;
+  Status FinishInternal(std::shared_ptr<ArrayData>* out) override;
   Status Init(int64_t capacity) override;
 
   /// Increase the capacity of the builder to accommodate at least the indicated
@@ -428,7 +432,7 @@ class ARROW_EXPORT AdaptiveUIntBuilder : public internal::AdaptiveIntBuilderBase
   Status Append(const uint64_t* values, int64_t length,
                 const uint8_t* valid_bytes = nullptr);
 
-  Status Finish(std::shared_ptr<Array>* out) override;
+  Status FinishInternal(std::shared_ptr<ArrayData>* out) override;
 
  protected:
   Status ExpandIntSize(uint8_t new_int_size);
@@ -490,7 +494,7 @@ class ARROW_EXPORT AdaptiveIntBuilder : public internal::AdaptiveIntBuilderBase 
   Status Append(const int64_t* values, int64_t length,
                 const uint8_t* valid_bytes = nullptr);
 
-  Status Finish(std::shared_ptr<Array>* out) override;
+  Status FinishInternal(std::shared_ptr<ArrayData>* out) override;
 
  protected:
   Status ExpandIntSize(uint8_t new_int_size);
@@ -513,11 +517,6 @@ class ARROW_EXPORT BooleanBuilder : public ArrayBuilder {
   explicit BooleanBuilder(MemoryPool* pool ARROW_MEMORY_POOL_DEFAULT);
 
   explicit BooleanBuilder(const std::shared_ptr<DataType>& type, MemoryPool* pool);
-
-#ifndef ARROW_NO_DEPRECATED_API
-  /// \deprecated Since 0.6.0
-  explicit BooleanBuilder(MemoryPool* pool, const std::shared_ptr<DataType>& type);
-#endif
 
   using ArrayBuilder::Advance;
 
@@ -592,7 +591,7 @@ class ARROW_EXPORT BooleanBuilder : public ArrayBuilder {
   /// \return Status
   Status Append(const std::vector<bool>& values);
 
-  Status Finish(std::shared_ptr<Array>* out) override;
+  Status FinishInternal(std::shared_ptr<ArrayData>* out) override;
   Status Init(int64_t capacity) override;
 
   /// Increase the capacity of the builder to accommodate at least the indicated
@@ -629,7 +628,7 @@ class ARROW_EXPORT ListBuilder : public ArrayBuilder {
 
   Status Init(int64_t elements) override;
   Status Resize(int64_t capacity) override;
-  Status Finish(std::shared_ptr<Array>* out) override;
+  Status FinishInternal(std::shared_ptr<ArrayData>* out) override;
 
   /// \brief Vector append
   ///
@@ -667,11 +666,6 @@ class ARROW_EXPORT BinaryBuilder : public ArrayBuilder {
  public:
   explicit BinaryBuilder(MemoryPool* pool ARROW_MEMORY_POOL_DEFAULT);
 
-#ifndef ARROW_NO_DEPRECATED_API
-  /// \deprecated Since 0.6.0
-  BinaryBuilder(MemoryPool* pool, const std::shared_ptr<DataType>& type);
-#endif
-
   BinaryBuilder(const std::shared_ptr<DataType>& type, MemoryPool* pool);
 
   Status Append(const uint8_t* value, int32_t length);
@@ -688,7 +682,7 @@ class ARROW_EXPORT BinaryBuilder : public ArrayBuilder {
 
   Status Init(int64_t elements) override;
   Status Resize(int64_t capacity) override;
-  Status Finish(std::shared_ptr<Array>* out) override;
+  Status FinishInternal(std::shared_ptr<ArrayData>* out) override;
 
   /// \return size of values buffer so far
   int64_t value_data_length() const { return value_data_builder_.length(); }
@@ -705,7 +699,6 @@ class ARROW_EXPORT BinaryBuilder : public ArrayBuilder {
   static constexpr int64_t kMaximumCapacity = std::numeric_limits<int32_t>::max() - 1;
 
   Status AppendNextOffset();
-  Status FinishInternal(std::shared_ptr<ArrayData>* out);
   void Reset();
 };
 
@@ -718,8 +711,6 @@ class ARROW_EXPORT StringBuilder : public BinaryBuilder {
 
   using BinaryBuilder::Append;
 
-  Status Finish(std::shared_ptr<Array>* out) override;
-
   Status Append(const std::vector<std::string>& values, uint8_t* null_bytes);
 };
 
@@ -728,11 +719,6 @@ class ARROW_EXPORT StringBuilder : public BinaryBuilder {
 
 class ARROW_EXPORT FixedSizeBinaryBuilder : public ArrayBuilder {
  public:
-#ifndef ARROW_NO_DEPRECATED_API
-  /// \deprecated Since 0.6.0
-  FixedSizeBinaryBuilder(MemoryPool* pool, const std::shared_ptr<DataType>& type);
-#endif
-
   FixedSizeBinaryBuilder(const std::shared_ptr<DataType>& type,
                          MemoryPool* pool ARROW_MEMORY_POOL_DEFAULT);
 
@@ -752,7 +738,7 @@ class ARROW_EXPORT FixedSizeBinaryBuilder : public ArrayBuilder {
 
   Status Init(int64_t elements) override;
   Status Resize(int64_t capacity) override;
-  Status Finish(std::shared_ptr<Array>* out) override;
+  Status FinishInternal(std::shared_ptr<ArrayData>* out) override;
 
   /// \return size of values buffer so far
   int64_t value_data_length() const { return byte_builder_.length(); }
@@ -772,16 +758,11 @@ class ARROW_EXPORT DecimalBuilder : public FixedSizeBinaryBuilder {
   explicit DecimalBuilder(const std::shared_ptr<DataType>& type,
                           MemoryPool* pool ARROW_MEMORY_POOL_DEFAULT);
 
-#ifndef ARROW_NO_DEPRECATED_API
-  /// \deprecated Since 0.6.0
-  explicit DecimalBuilder(MemoryPool* pool, const std::shared_ptr<DataType>& type);
-#endif
-
   using FixedSizeBinaryBuilder::Append;
 
   Status Append(const Decimal128& val);
 
-  Status Finish(std::shared_ptr<Array>* out) override;
+  Status FinishInternal(std::shared_ptr<ArrayData>* out) override;
 };
 
 // ----------------------------------------------------------------------
@@ -794,16 +775,10 @@ class ARROW_EXPORT DecimalBuilder : public FixedSizeBinaryBuilder {
 /// called to maintain data-structure consistency.
 class ARROW_EXPORT StructBuilder : public ArrayBuilder {
  public:
-#ifndef ARROW_NO_DEPRECATED_API
-  /// \deprecated Since 0.6.0
-  StructBuilder(MemoryPool* pool, const std::shared_ptr<DataType>& type,
-                std::vector<std::unique_ptr<ArrayBuilder>>&& field_builders);
-#endif
-
   StructBuilder(const std::shared_ptr<DataType>& type, MemoryPool* pool,
                 std::vector<std::unique_ptr<ArrayBuilder>>&& field_builders);
 
-  Status Finish(std::shared_ptr<Array>* out) override;
+  Status FinishInternal(std::shared_ptr<ArrayData>* out) override;
 
   /// Null bitmap is of equal length to every child field, and any zero byte
   /// will be considered as a null for that field, but users must using app-
@@ -888,11 +863,6 @@ class ARROW_EXPORT DictionaryBuilder : public ArrayBuilder {
 
   ~DictionaryBuilder() {}
 
-#ifndef ARROW_NO_DEPRECATED_API
-  /// \deprecated Since 0.6.0
-  explicit DictionaryBuilder(MemoryPool* pool, const std::shared_ptr<DataType>& type);
-#endif
-
   DictionaryBuilder(const std::shared_ptr<DataType>& type, MemoryPool* pool);
 
   template <typename T1 = T>
@@ -911,7 +881,7 @@ class ARROW_EXPORT DictionaryBuilder : public ArrayBuilder {
 
   Status Init(int64_t elements) override;
   Status Resize(int64_t capacity) override;
-  Status Finish(std::shared_ptr<Array>* out) override;
+  Status FinishInternal(std::shared_ptr<ArrayData>* out) override;
 
  protected:
   Status DoubleTableSize();
@@ -935,10 +905,32 @@ class ARROW_EXPORT DictionaryBuilder : public ArrayBuilder {
   int32_t byte_width_;
 };
 
+template <>
+class ARROW_EXPORT DictionaryBuilder<NullType> : public ArrayBuilder {
+ public:
+  ~DictionaryBuilder();
+
+  DictionaryBuilder(const std::shared_ptr<DataType>& type, MemoryPool* pool);
+  explicit DictionaryBuilder(MemoryPool* pool);
+
+  /// \brief Append a scalar null value
+  Status AppendNull();
+
+  /// \brief Append a whole dense array to the builder
+  Status AppendArray(const Array& array);
+
+  Status Init(int64_t elements) override;
+  Status Resize(int64_t capacity) override;
+  Status FinishInternal(std::shared_ptr<ArrayData>* out) override;
+
+ protected:
+  AdaptiveIntBuilder values_builder_;
+};
+
 class ARROW_EXPORT BinaryDictionaryBuilder : public DictionaryBuilder<BinaryType> {
  public:
-  using DictionaryBuilder::DictionaryBuilder;
   using DictionaryBuilder::Append;
+  using DictionaryBuilder::DictionaryBuilder;
 
   Status Append(const uint8_t* value, int32_t length) {
     return Append(internal::WrappedBinary(value, length));
@@ -958,8 +950,8 @@ class ARROW_EXPORT BinaryDictionaryBuilder : public DictionaryBuilder<BinaryType
 /// \brief Dictionary array builder with convenience methods for strings
 class ARROW_EXPORT StringDictionaryBuilder : public DictionaryBuilder<StringType> {
  public:
-  using DictionaryBuilder::DictionaryBuilder;
   using DictionaryBuilder::Append;
+  using DictionaryBuilder::DictionaryBuilder;
 
   Status Append(const uint8_t* value, int32_t length) {
     return Append(internal::WrappedBinary(value, length));

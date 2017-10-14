@@ -26,10 +26,6 @@
 
 using arrow::Status;
 
-/* Number of times we try binding to a socket. */
-#define NUM_BIND_ATTEMPTS 5
-#define BIND_TIMEOUT_MS 100
-
 /* Number of times we try connecting to a socket. */
 #define NUM_CONNECT_ATTEMPTS 50
 #define CONNECT_TIMEOUT_MS 100
@@ -96,11 +92,14 @@ Status ReadMessage(int fd, int64_t* type, std::vector<uint8_t>* buffer) {
   RETURN_NOT_OK_ELSE(ReadBytes(fd, reinterpret_cast<uint8_t*>(&version), sizeof(version)),
                      *type = DISCONNECT_CLIENT);
   ARROW_CHECK(version == PLASMA_PROTOCOL_VERSION) << "version = " << version;
-  size_t length;
   RETURN_NOT_OK_ELSE(ReadBytes(fd, reinterpret_cast<uint8_t*>(type), sizeof(*type)),
                      *type = DISCONNECT_CLIENT);
-  RETURN_NOT_OK_ELSE(ReadBytes(fd, reinterpret_cast<uint8_t*>(&length), sizeof(length)),
-                     *type = DISCONNECT_CLIENT);
+  int64_t length_temp;
+  RETURN_NOT_OK_ELSE(
+      ReadBytes(fd, reinterpret_cast<uint8_t*>(&length_temp), sizeof(length_temp)),
+      *type = DISCONNECT_CLIENT);
+  // The length must be read as an int64_t, but it should be used as a size_t.
+  size_t length = static_cast<size_t>(length_temp);
   if (length > buffer->size()) {
     buffer->resize(length);
   }
@@ -134,7 +133,8 @@ int bind_ipc_sock(const std::string& pathname, bool shall_listen) {
   }
   strncpy(socket_address.sun_path, pathname.c_str(), pathname.size() + 1);
 
-  if (bind(socket_fd, (struct sockaddr*)&socket_address, sizeof(socket_address)) != 0) {
+  if (bind(socket_fd, reinterpret_cast<struct sockaddr*>(&socket_address),
+           sizeof(socket_address)) != 0) {
     ARROW_LOG(ERROR) << "Bind failed for pathname " << pathname;
     close(socket_fd);
     return -1;
@@ -197,8 +197,8 @@ int connect_ipc_sock(const std::string& pathname) {
   }
   strncpy(socket_address.sun_path, pathname.c_str(), pathname.size() + 1);
 
-  if (connect(socket_fd, (struct sockaddr*)&socket_address, sizeof(socket_address)) !=
-      0) {
+  if (connect(socket_fd, reinterpret_cast<struct sockaddr*>(&socket_address),
+              sizeof(socket_address)) != 0) {
     close(socket_fd);
     return -1;
   }
@@ -227,6 +227,7 @@ uint8_t* read_message_async(int sock) {
   uint8_t* message = reinterpret_cast<uint8_t*>(malloc(size));
   s = ReadBytes(sock, message, size);
   if (!s.ok()) {
+    free(message);
     /* The other side has closed the socket. */
     ARROW_LOG(DEBUG) << "Socket has been closed, or some other error has occurred.";
     close(sock);

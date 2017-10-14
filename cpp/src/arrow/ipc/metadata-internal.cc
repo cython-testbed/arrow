@@ -46,6 +46,7 @@ namespace arrow {
 namespace flatbuf = org::apache::arrow::flatbuf;
 
 namespace ipc {
+namespace internal {
 
 using FBB = flatbuffers::FlatBufferBuilder;
 using DictionaryOffset = flatbuffers::Offset<flatbuf::DictionaryEncoding>;
@@ -229,6 +230,9 @@ static Status TypeFromFlatbuffer(flatbuf::Type type, const void* type_data,
   switch (type) {
     case flatbuf::Type_NONE:
       return Status::Invalid("Type metadata cannot be none");
+    case flatbuf::Type_Null:
+      *out = null();
+      return Status::OK();
     case flatbuf::Type_Int:
       return IntFromFlatbuffer(static_cast<const flatbuf::Int*>(type_data), out);
     case flatbuf::Type_FloatingPoint:
@@ -353,6 +357,10 @@ static Status TypeToFlatbuffer(FBB& fbb, const DataType& type,
   }
 
   switch (value_type->id()) {
+    case Type::NA:
+      *out_type = flatbuf::Type_Null;
+      *offset = flatbuf::CreateNull(fbb).Union();
+      break;
     case Type::BOOL:
       *out_type = flatbuf::Type_Bool;
       *offset = flatbuf::CreateBool(fbb).Union();
@@ -926,5 +934,6 @@ Status WriteMessage(const Buffer& message, io::OutputStream* file,
   return Status::OK();
 }
 
+}  // namespace internal
 }  // namespace ipc
 }  // namespace arrow

@@ -556,7 +556,8 @@ cdef class RecordBatch:
         return Table.from_batches([self]).to_pandas(nthreads=nthreads)
 
     @classmethod
-    def from_pandas(cls, df, Schema schema=None, bint preserve_index=True):
+    def from_pandas(cls, df, Schema schema=None, bint preserve_index=True,
+                    nthreads=None):
         """
         Convert pandas.DataFrame to an Arrow RecordBatch
 
@@ -569,13 +570,16 @@ cdef class RecordBatch:
         preserve_index : bool, optional
             Whether to store the index as an additional column in the resulting
             ``RecordBatch``.
+        nthreads : int, default None (may use up to system CPU count threads)
+            If greater than 1, convert columns to Arrow in parallel using
+            indicated number of threads
 
         Returns
         -------
         pyarrow.RecordBatch
         """
         names, arrays, metadata = pdcompat.dataframe_to_arrays(
-            df, False, schema, preserve_index
+            df, schema, preserve_index, nthreads=nthreads
         )
         return cls.from_arrays(arrays, names, metadata)
 
@@ -714,27 +718,23 @@ cdef class Table:
         return result
 
     @classmethod
-    def from_pandas(cls, df, bint timestamps_to_ms=False,
-                    Schema schema=None, bint preserve_index=True):
+    def from_pandas(cls, df, Schema schema=None, bint preserve_index=True,
+                    nthreads=None):
         """
         Convert pandas.DataFrame to an Arrow Table
 
         Parameters
         ----------
         df : pandas.DataFrame
-        timestamps_to_ms : bool
-            Convert datetime columns to ms resolution. This is needed for
-            compability with other functionality like Parquet I/O which
-            only supports milliseconds.
-
-            .. deprecated:: 0.7.0
-
         schema : pyarrow.Schema, optional
             The expected schema of the Arrow Table. This can be used to
             indicate the type of columns if we cannot infer it automatically.
         preserve_index : bool, optional
             Whether to store the index as an additional column in the resulting
             ``Table``.
+        nthreads : int, default None (may use up to system CPU count threads)
+            If greater than 1, convert columns to Arrow in parallel using
+            indicated number of threads
 
         Returns
         -------
@@ -754,9 +754,9 @@ cdef class Table:
         """
         names, arrays, metadata = pdcompat.dataframe_to_arrays(
             df,
-            timestamps_to_ms=timestamps_to_ms,
             schema=schema,
-            preserve_index=preserve_index
+            preserve_index=preserve_index,
+            nthreads=nthreads
         )
         return cls.from_arrays(arrays, names=names, metadata=metadata)
 

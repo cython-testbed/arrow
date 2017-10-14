@@ -123,6 +123,12 @@ struct CastFunctor<T, NullType, typename std::enable_if<
   }
 };
 
+template <>
+struct CastFunctor<NullType, DictionaryType> {
+  void operator()(FunctionContext* ctx, const CastOptions& options, const Array& input,
+                  ArrayData* output) {}
+};
+
 // ----------------------------------------------------------------------
 // Boolean to other things
 
@@ -261,8 +267,9 @@ void UnpackFixedSizeBinaryDictionary(FunctionContext* ctx, const Array& indices,
                                      const FixedSizeBinaryArray& dictionary,
                                      ArrayData* output) {
   using index_c_type = typename IndexType::c_type;
-  const uint8_t* valid_bits = indices.null_bitmap_data();
-  INIT_BITSET(valid_bits, indices.offset());
+
+  internal::BitmapReader valid_bits_reader(indices.null_bitmap_data(), indices.offset(),
+                                           indices.length());
 
   const index_c_type* in =
       reinterpret_cast<const index_c_type*>(indices.data()->buffers[1]->data()) +
@@ -271,11 +278,11 @@ void UnpackFixedSizeBinaryDictionary(FunctionContext* ctx, const Array& indices,
   int32_t byte_width =
       static_cast<const FixedSizeBinaryType&>(*output->type).byte_width();
   for (int64_t i = 0; i < indices.length(); ++i) {
-    if (bitset_valid_bits & (1 << bit_offset_valid_bits)) {
+    if (valid_bits_reader.IsSet()) {
       const uint8_t* value = dictionary.Value(in[i]);
       memcpy(out + i * byte_width, value, byte_width);
     }
-    READ_NEXT_BITSET(valid_bits);
+    valid_bits_reader.Next();
   }
 }
 
@@ -293,8 +300,7 @@ struct CastFunctor<
 
     // Check if values and output type match
     DCHECK(values_type.Equals(*output->type))
-      << "Dictionary type: " << values_type
-      << " target type: " << (*output->type);
+        << "Dictionary type: " << values_type << " target type: " << (*output->type);
 
     const Array& indices = *dict_array.indices();
     switch (indices.type()->id()) {
@@ -327,21 +333,21 @@ Status UnpackBinaryDictionary(FunctionContext* ctx, const Array& indices,
   RETURN_NOT_OK(MakeBuilder(ctx->memory_pool(), output->type, &builder));
   BinaryBuilder* binary_builder = static_cast<BinaryBuilder*>(builder.get());
 
-  const uint8_t* valid_bits = indices.null_bitmap_data();
-  INIT_BITSET(valid_bits, indices.offset());
+  internal::BitmapReader valid_bits_reader(indices.null_bitmap_data(), indices.offset(),
+                                           indices.length());
 
   const index_c_type* in =
       reinterpret_cast<const index_c_type*>(indices.data()->buffers[1]->data()) +
       indices.offset();
   for (int64_t i = 0; i < indices.length(); ++i) {
-    if (bitset_valid_bits & (1 << bit_offset_valid_bits)) {
+    if (valid_bits_reader.IsSet()) {
       int32_t length;
       const uint8_t* value = dictionary.GetValue(in[i], &length);
       RETURN_NOT_OK(binary_builder->Append(value, length));
     } else {
       RETURN_NOT_OK(binary_builder->AppendNull());
     }
-    READ_NEXT_BITSET(valid_bits);
+    valid_bits_reader.Next();
   }
 
   std::shared_ptr<Array> plain_array;
@@ -366,8 +372,7 @@ struct CastFunctor<T, DictionaryType,
 
     // Check if values and output type match
     DCHECK(values_type.Equals(*output->type))
-      << "Dictionary type: " << values_type
-      << " target type: " << (*output->type);
+        << "Dictionary type: " << values_type << " target type: " << (*output->type);
 
     const Array& indices = *dict_array.indices();
     switch (indices.type()->id()) {
@@ -401,17 +406,17 @@ void UnpackPrimitiveDictionary(const Array& indices, const c_type* dictionary,
                                c_type* out) {
   using index_c_type = typename IndexType::c_type;
 
-  const uint8_t* valid_bits = indices.null_bitmap_data();
-  INIT_BITSET(valid_bits, indices.offset());
+  internal::BitmapReader valid_bits_reader(indices.null_bitmap_data(), indices.offset(),
+                                           indices.length());
 
   const index_c_type* in =
       reinterpret_cast<const index_c_type*>(indices.data()->buffers[1]->data()) +
       indices.offset();
   for (int64_t i = 0; i < indices.length(); ++i) {
-    if (bitset_valid_bits & (1 << bit_offset_valid_bits)) {
+    if (valid_bits_reader.IsSet()) {
       out[i] = dictionary[in[i]];
     }
-    READ_NEXT_BITSET(valid_bits);
+    valid_bits_reader.Next();
   }
 }
 
@@ -429,8 +434,7 @@ struct CastFunctor<T, DictionaryType,
 
     // Check if values and output type match
     DCHECK(values_type.Equals(*output->type))
-      << "Dictionary type: " << values_type
-      << " target type: " << (*output->type);
+        << "Dictionary type: " << values_type << " target type: " << (*output->type);
 
     auto dictionary =
         reinterpret_cast<const c_type*>(type.dictionary()->data()->buffers[1]->data()) +
@@ -492,29 +496,34 @@ static Status AllocateIfNotPreallocated(FunctionContext* ctx, const Array& input
   if (can_pre_allocate_values) {
     std::shared_ptr<Buffer> out_data;
 
-    if (!(is_primitive(out->type->id()) || out->type->id() == Type::FIXED_SIZE_BINARY)) {
+    const Type::type type_id = out->type->id();
+
+    if (!(is_primitive(type_id) || type_id == Type::FIXED_SIZE_BINARY ||
+          type_id == Type::DECIMAL)) {
       std::stringstream ss;
       ss << "Cannot pre-allocate memory for type: " << out->type->ToString();
       return Status::NotImplemented(ss.str());
     }
 
-    const auto& fw_type = static_cast<const FixedWidthType&>(*out->type);
+    if (type_id != Type::NA) {
+      const auto& fw_type = static_cast<const FixedWidthType&>(*out->type);
 
-    int bit_width = fw_type.bit_width();
-    int64_t buffer_size = 0;
+      int bit_width = fw_type.bit_width();
+      int64_t buffer_size = 0;
 
-    if (bit_width == 1) {
-      buffer_size = BitUtil::BytesForBits(length);
-    } else if (bit_width % 8 == 0) {
-      buffer_size = length * fw_type.bit_width() / 8;
-    } else {
-      DCHECK(false);
+      if (bit_width == 1) {
+        buffer_size = BitUtil::BytesForBits(length);
+      } else if (bit_width % 8 == 0) {
+        buffer_size = length * fw_type.bit_width() / 8;
+      } else {
+        DCHECK(false);
+      }
+
+      RETURN_NOT_OK(ctx->Allocate(buffer_size, &out_data));
+      memset(out_data->mutable_data(), 0, buffer_size);
+
+      out->buffers.push_back(out_data);
     }
-
-    RETURN_NOT_OK(ctx->Allocate(buffer_size, &out_data));
-    memset(out_data->mutable_data(), 0, buffer_size);
-
-    out->buffers.push_back(out_data);
   }
 
   return Status::OK();
@@ -600,6 +609,7 @@ class CastKernel : public UnaryKernel {
 #define TIMESTAMP_CASES(FN, IN_TYPE) FN(TimestampType, TimestampType);
 
 #define DICTIONARY_CASES(FN, IN_TYPE) \
+  FN(IN_TYPE, NullType);              \
   FN(IN_TYPE, Time32Type);            \
   FN(IN_TYPE, Date32Type);            \
   FN(IN_TYPE, TimestampType);         \
@@ -616,6 +626,7 @@ class CastKernel : public UnaryKernel {
   FN(IN_TYPE, FloatType);             \
   FN(IN_TYPE, DoubleType);            \
   FN(IN_TYPE, FixedSizeBinaryType);   \
+  FN(IN_TYPE, DecimalType);           \
   FN(IN_TYPE, BinaryType);            \
   FN(IN_TYPE, StringType);
 

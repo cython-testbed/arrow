@@ -18,12 +18,28 @@
 #ifndef ARROW_UTIL_BIT_UTIL_H
 #define ARROW_UTIL_BIT_UTIL_H
 
-#if defined(__APPLE__)
+#ifdef _WIN32
+#define ARROW_LITTLE_ENDIAN 1
+#else
+#ifdef __APPLE__
 #include <machine/endian.h>
-#elif defined(_WIN32)
-#define __LITTLE_ENDIAN 1
 #else
 #include <endian.h>
+#endif
+#
+#ifndef __BYTE_ORDER__
+#error "__BYTE_ORDER__ not defined"
+#endif
+#
+#ifndef __ORDER_LITTLE_ENDIAN__
+#error "__ORDER_LITTLE_ENDIAN__ not defined"
+#endif
+#
+#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+#define ARROW_LITTLE_ENDIAN 1
+#else
+#define ARROW_LITTLE_ENDIAN 0
+#endif
 #endif
 
 #if defined(_MSC_VER)
@@ -48,19 +64,6 @@
 #endif
 
 namespace arrow {
-
-#define INIT_BITSET(valid_bits_vector, valid_bits_index)            \
-  int64_t byte_offset_##valid_bits_vector = (valid_bits_index) / 8; \
-  int64_t bit_offset_##valid_bits_vector = (valid_bits_index) % 8;  \
-  uint8_t bitset_##valid_bits_vector = valid_bits_vector[byte_offset_##valid_bits_vector];
-
-#define READ_NEXT_BITSET(valid_bits_vector)                                          \
-  bit_offset_##valid_bits_vector++;                                                  \
-  if (bit_offset_##valid_bits_vector == 8) {                                         \
-    bit_offset_##valid_bits_vector = 0;                                              \
-    byte_offset_##valid_bits_vector++;                                               \
-    bitset_##valid_bits_vector = valid_bits_vector[byte_offset_##valid_bits_vector]; \
-  }
 
 // TODO(wesm): The source from Impala was depending on boost::make_unsigned
 //
@@ -337,7 +340,7 @@ static inline void ByteSwap(void* dst, const void* src, int len) {
 
 /// Converts to big endian format (if not already in big endian) from the
 /// machine's native endian format.
-#if __BYTE_ORDER == __LITTLE_ENDIAN
+#if ARROW_LITTLE_ENDIAN
 static inline int64_t ToBigEndian(int64_t value) { return ByteSwap(value); }
 static inline uint64_t ToBigEndian(uint64_t value) { return ByteSwap(value); }
 static inline int32_t ToBigEndian(int32_t value) { return ByteSwap(value); }
@@ -354,7 +357,7 @@ static inline uint16_t ToBigEndian(uint16_t val) { return val; }
 #endif
 
 /// Converts from big endian format to the machine's native endian format.
-#if __BYTE_ORDER == __LITTLE_ENDIAN
+#if ARROW_LITTLE_ENDIAN
 static inline int64_t FromBigEndian(int64_t value) { return ByteSwap(value); }
 static inline uint64_t FromBigEndian(uint64_t value) { return ByteSwap(value); }
 static inline int32_t FromBigEndian(int32_t value) { return ByteSwap(value); }
@@ -386,6 +389,102 @@ ARROW_EXPORT
 Status BytesToBits(const std::vector<uint8_t>&, MemoryPool*, std::shared_ptr<Buffer>*);
 
 }  // namespace BitUtil
+
+namespace internal {
+
+class BitmapReader {
+ public:
+  BitmapReader(const uint8_t* bitmap, int64_t start_offset, int64_t length)
+      : bitmap_(bitmap), position_(0), length_(length) {
+    current_byte_ = 0;
+    byte_offset_ = start_offset / 8;
+    bit_offset_ = start_offset % 8;
+    if (length > 0) {
+      current_byte_ = bitmap[byte_offset_];
+    }
+  }
+
+#if defined(_MSC_VER)
+  // MSVC is finicky about this cast
+  bool IsSet() const { return (current_byte_ & (1 << bit_offset_)) != 0; }
+#else
+  bool IsSet() const { return current_byte_ & (1 << bit_offset_); }
+#endif
+
+  bool IsNotSet() const { return (current_byte_ & (1 << bit_offset_)) == 0; }
+
+  void Next() {
+    ++bit_offset_;
+    ++position_;
+    if (bit_offset_ == 8) {
+      bit_offset_ = 0;
+      ++byte_offset_;
+      if (ARROW_PREDICT_TRUE(position_ < length_)) {
+        current_byte_ = bitmap_[byte_offset_];
+      }
+    }
+  }
+
+ private:
+  const uint8_t* bitmap_;
+  int64_t position_;
+  int64_t length_;
+
+  uint8_t current_byte_;
+  int64_t byte_offset_;
+  int64_t bit_offset_;
+};
+
+class BitmapWriter {
+ public:
+  BitmapWriter(uint8_t* bitmap, int64_t start_offset, int64_t length)
+      : bitmap_(bitmap), position_(0), length_(length) {
+    current_byte_ = 0;
+    byte_offset_ = start_offset / 8;
+    bit_offset_ = start_offset % 8;
+    if (length > 0) {
+      current_byte_ = bitmap[byte_offset_];
+    }
+  }
+
+  void Set() { current_byte_ |= BitUtil::kBitmask[bit_offset_]; }
+
+  void Clear() { current_byte_ &= BitUtil::kFlippedBitmask[bit_offset_]; }
+
+  void Next() {
+    ++bit_offset_;
+    ++position_;
+    bitmap_[byte_offset_] = current_byte_;
+    if (bit_offset_ == 8) {
+      bit_offset_ = 0;
+      ++byte_offset_;
+      if (ARROW_PREDICT_TRUE(position_ < length_)) {
+        current_byte_ = bitmap_[byte_offset_];
+      }
+    }
+  }
+
+  void Finish() {
+    if (ARROW_PREDICT_TRUE(position_ < length_)) {
+      if (bit_offset_ != 0) {
+        bitmap_[byte_offset_] = current_byte_;
+      }
+    }
+  }
+
+  int64_t position() const { return position_; }
+
+ private:
+  uint8_t* bitmap_;
+  int64_t position_;
+  int64_t length_;
+
+  uint8_t current_byte_;
+  int64_t byte_offset_;
+  int64_t bit_offset_;
+};
+
+}  // namespace internal
 
 // ----------------------------------------------------------------------
 // Bitmap utilities
@@ -419,13 +518,6 @@ int64_t CountSetBits(const uint8_t* data, int64_t bit_offset, int64_t length);
 ARROW_EXPORT
 bool BitmapEquals(const uint8_t* left, int64_t left_offset, const uint8_t* right,
                   int64_t right_offset, int64_t bit_length);
-
-#ifndef ARROW_NO_DEPRECATED_API
-/// \deprecated Since 0.7.0
-ARROW_EXPORT
-Status GetEmptyBitmap(MemoryPool* pool, int64_t length,
-                      std::shared_ptr<MutableBuffer>* result);
-#endif
 
 }  // namespace arrow
 

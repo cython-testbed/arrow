@@ -108,7 +108,7 @@ building Arrow C++:
 
 .. code-block:: shell
 
-   brew install ccache jemalloc boost thrift
+   brew update && brew bundle --file=python/Brewfile
 
 On Debian/Ubuntu, you need the following minimal set of dependencies. All other
 dependencies will be automatically built by Arrow' thrid-party toolchain.
@@ -272,7 +272,8 @@ Now, we build and install Arrow C++ libraries
    cmake -G "Visual Studio 14 2015 Win64" ^
          -DCMAKE_INSTALL_PREFIX=%ARROW_HOME% ^
          -DCMAKE_BUILD_TYPE=Release ^
-         -DARROW_BUILD_TESTS=off ^
+         -DARROW_BUILD_TESTS=on ^
+         -DARROW_CXXFLAGS="/WX" ^
          -DARROW_PYTHON=on ..
    cmake --build . --target INSTALL --config Release
    cd ..\..

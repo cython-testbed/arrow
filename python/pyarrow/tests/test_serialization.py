@@ -19,7 +19,8 @@ from __future__ import division
 
 import pytest
 
-from collections import namedtuple
+from collections import namedtuple, OrderedDict, defaultdict
+import datetime
 import string
 import sys
 
@@ -50,6 +51,12 @@ def assert_equal(obj1, obj2):
                                                                   .format(
                                                                       obj1,
                                                                       obj2))
+        try:
+            # Workaround to make comparison of OrderedDicts work on Python 2.7
+            if obj1 == obj2:
+                return
+        except:
+            pass
         for key in obj1.__dict__.keys():
             if key not in special_keys:
                 assert_equal(obj1.__dict__[key], obj2.__dict__[key])
@@ -168,50 +175,24 @@ NamedTupleExample = namedtuple("Example",
 
 CUSTOM_OBJECTS = [Exception("Test object."), CustomError(), Point(11, y=22),
                   Foo(), Bar(), Baz(), Qux(), SubQux(), SubQuxPickle(),
-                  NamedTupleExample(1, 1.0, "hi", np.zeros([3, 5]), [1, 2, 3])]
+                  NamedTupleExample(1, 1.0, "hi", np.zeros([3, 5]), [1, 2, 3]),
+                  OrderedDict([("hello", 1), ("world", 2)])]
 
 
 def make_serialization_context():
 
-    def array_custom_serializer(obj):
-        return obj.tolist(), obj.dtype.str
+    context = pa._default_serialization_context
 
-    def array_custom_deserializer(serialized_obj):
-        return np.array(serialized_obj[0], dtype=np.dtype(serialized_obj[1]))
-
-    context = pa.SerializationContext()
-
-    # This is for numpy arrays of "object" only; primitive types are handled
-    # efficiently with Arrow's Tensor facilities (see python_to_arrow.cc)
-    context.register_type(np.ndarray, 20 * b"\x00",
-                          custom_serializer=array_custom_serializer,
-                          custom_deserializer=array_custom_deserializer)
-
-    context.register_type(Foo, 20 * b"\x01")
-    context.register_type(Bar, 20 * b"\x02")
-    context.register_type(Baz, 20 * b"\x03")
-    context.register_type(Qux, 20 * b"\x04")
-    context.register_type(SubQux, 20 * b"\x05")
-    context.register_type(SubQuxPickle, 20 * b"\x05", pickle=True)
-    context.register_type(Exception, 20 * b"\x06")
-    context.register_type(CustomError, 20 * b"\x07")
-    context.register_type(Point, 20 * b"\x08")
-    context.register_type(NamedTupleExample, 20 * b"\x09")
-
-    # TODO(pcm): This is currently a workaround until arrow supports
-    # arbitrary precision integers. This is only called on long integers,
-    # see the associated case in the append method in python_to_arrow.cc
-    context.register_type(int, 20 * b"\x10", pickle=False,
-                          custom_serializer=lambda obj: str(obj),
-                          custom_deserializer=(
-                              lambda serialized_obj: int(serialized_obj)))
-
-    if (sys.version_info < (3, 0)):
-        deserializer = (
-            lambda serialized_obj: long(serialized_obj))  # noqa: E501,F821
-        context.register_type(long, 20 * b"\x11", pickle=False,  # noqa: E501,F821
-                              custom_serializer=lambda obj: str(obj),
-                              custom_deserializer=deserializer)
+    context.register_type(Foo, "Foo")
+    context.register_type(Bar, "Bar")
+    context.register_type(Baz, "Baz")
+    context.register_type(Qux, "Quz")
+    context.register_type(SubQux, "SubQux")
+    context.register_type(SubQuxPickle, "SubQuxPickle", pickle=True)
+    context.register_type(Exception, "Exception")
+    context.register_type(CustomError, "CustomError")
+    context.register_type(Point, "Point")
+    context.register_type(NamedTupleExample, "NamedTupleExample")
 
     return context
 
@@ -267,12 +248,42 @@ def test_custom_serialization(large_memory_map):
             serialization_roundtrip(obj, mmap)
 
 
+def test_default_dict_serialization(large_memory_map):
+    pytest.importorskip("cloudpickle")
+    with pa.memory_map(large_memory_map, mode="r+") as mmap:
+        obj = defaultdict(lambda: 0, [("hello", 1), ("world", 2)])
+        serialization_roundtrip(obj, mmap)
+
+
 def test_numpy_serialization(large_memory_map):
     with pa.memory_map(large_memory_map, mode="r+") as mmap:
         for t in ["int8", "uint8", "int16", "uint16",
                   "int32", "uint32", "float32", "float64"]:
             obj = np.random.randint(0, 10, size=(100, 100)).astype(t)
             serialization_roundtrip(obj, mmap)
+
+
+def test_datetime_serialization(large_memory_map):
+    data = [# Principia Mathematica published
+            datetime.datetime(year=1687, month=7, day=5),
+            # Some random date
+            datetime.datetime(year=1911, month=6, day=3, hour=4,
+                              minute=55, second=44),
+            # End of WWI
+            datetime.datetime(year=1918, month=11, day=11),
+            # Beginning of UNIX time
+            datetime.datetime(year=1970, month=1, day=1),
+            # The Berlin wall falls
+            datetime.datetime(year=1989, month=11, day=9),
+            # Another random date
+            datetime.datetime(year=2011, month=6, day=3, hour=4,
+                              minute=0, second=3),
+            # Another random date
+            datetime.datetime(year=1970, month=1, day=3, hour=4,
+                              minute=0, second=0)]
+    with pa.memory_map(large_memory_map, mode="r+") as mmap:
+        for d in data:
+            serialization_roundtrip(d, mmap)
 
 
 def test_numpy_immutable(large_memory_map):

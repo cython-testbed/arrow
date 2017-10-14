@@ -46,21 +46,6 @@ using std::vector;
 namespace arrow {
 namespace compute {
 
-void AssertArraysEqual(const Array& left, const Array& right) {
-  bool are_equal = false;
-  ASSERT_OK(ArrayEquals(left, right, &are_equal));
-
-  if (!are_equal) {
-    std::stringstream ss;
-
-    ss << "Left: ";
-    EXPECT_OK(PrettyPrint(left, 0, &ss));
-    ss << "\nRight: ";
-    EXPECT_OK(PrettyPrint(right, 0, &ss));
-    FAIL() << ss.str();
-  }
-}
-
 class ComputeFixture {
  public:
   ComputeFixture() : ctx_(default_memory_pool()) {}
@@ -394,7 +379,7 @@ TEST_F(TestCast, PreallocatedMemory) {
 template <typename TestType>
 class TestDictionaryCast : public TestCast {};
 
-typedef ::testing::Types<UInt8Type, Int8Type, UInt16Type, Int16Type, Int32Type,
+typedef ::testing::Types<NullType, UInt8Type, Int8Type, UInt16Type, Int16Type, Int32Type,
                          UInt32Type, UInt64Type, Int64Type, FloatType, DoubleType,
                          Date32Type, Date64Type, FixedSizeBinaryType, BinaryType>
     TestTypes;
