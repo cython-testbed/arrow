@@ -72,7 +72,7 @@ if [ "$PYTHON_VERSION" == "2.7" ]; then
 fi
 
 pip install -r requirements.txt
-pip install --install-option="--no-cython-compile" https://github.com/cython/cython/archive/0.27rc1.zip
+pip install --install-option="--no-cython-compile" https://github.com/cython/cython/archive/23e8254fb8c83a5a70e692c9f553acbc37a45f57.zip
 python setup.py build_ext --with-parquet --with-plasma \
        install --single-version-externally-managed --record=record.text
 popd
