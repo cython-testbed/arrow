@@ -616,11 +616,10 @@ static Status ConvertTimes(PandasOptions options, const ChunkedArray& data,
   return Status::OK();
 }
 
-static Status RawDecimalToString(const uint8_t* bytes, int precision, int scale,
-                                 std::string* result) {
+static Status RawDecimalToString(const uint8_t* bytes, int scale, std::string* result) {
   DCHECK_NE(result, nullptr);
   Decimal128 decimal(bytes);
-  *result = decimal.ToString(precision, scale);
+  *result = decimal.ToString(scale);
   return Status::OK();
 }
 
@@ -634,9 +633,8 @@ static Status ConvertDecimals(PandasOptions options, const ChunkedArray& data,
   PyObject* Decimal = Decimal_ref.obj();
 
   for (int c = 0; c < data.num_chunks(); c++) {
-    auto* arr(static_cast<arrow::DecimalArray*>(data.chunk(c).get()));
+    auto* arr(static_cast<arrow::Decimal128Array*>(data.chunk(c).get()));
     auto type(std::dynamic_pointer_cast<arrow::DecimalType>(arr->type()));
-    const int precision = type->precision();
     const int scale = type->scale();
 
     for (int64_t i = 0; i < arr->length(); ++i) {
@@ -646,7 +644,7 @@ static Status ConvertDecimals(PandasOptions options, const ChunkedArray& data,
       } else {
         const uint8_t* raw_value = arr->GetValue(i);
         std::string decimal_string;
-        RETURN_NOT_OK(RawDecimalToString(raw_value, precision, scale, &decimal_string));
+        RETURN_NOT_OK(RawDecimalToString(raw_value, scale, &decimal_string));
         *out_values++ = internal::DecimalFromString(Decimal, decimal_string);
         RETURN_IF_PYERROR();
       }

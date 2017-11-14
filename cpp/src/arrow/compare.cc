@@ -152,7 +152,7 @@ class RangeEqualsVisitor {
   bool CompareUnions(const UnionArray& left) const {
     const auto& right = static_cast<const UnionArray&>(right_);
 
-    const UnionMode union_mode = left.mode();
+    const UnionMode::type union_mode = left.mode();
     if (union_mode != right.mode()) {
       return false;
     }
@@ -255,7 +255,7 @@ class RangeEqualsVisitor {
     return Status::OK();
   }
 
-  Status Visit(const DecimalArray& left) {
+  Status Visit(const Decimal128Array& left) {
     return Visit(static_cast<const FixedSizeBinaryArray&>(left));
   }
 

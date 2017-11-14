@@ -22,7 +22,7 @@ import os
 import json
 import pytest
 
-from pyarrow.compat import guid, u, BytesIO
+from pyarrow.compat import guid, u, BytesIO, unichar, frombytes
 from pyarrow.filesystem import LocalFileSystem
 import pyarrow as pa
 from .pandas_examples import dataframe_with_arrays, dataframe_with_lists
@@ -469,11 +469,59 @@ def test_parquet_metadata_api():
         schema[-1]
 
     # Row group
-    rg_meta = meta.row_group(0)
-    repr(rg_meta)
+    for rg in range(meta.num_row_groups):
+        rg_meta = meta.row_group(rg)
+        repr(rg_meta)
+
+        for col in range(rg_meta.num_columns):
+            col_meta = rg_meta.column(col)
+            repr(col_meta)
 
     assert rg_meta.num_rows == len(df)
     assert rg_meta.num_columns == ncols + 1  # +1 for index
+
+
+@parquet
+@pytest.mark.parametrize(
+    'data, dtype, min_value, max_value, null_count, num_values',
+    [
+        ([1, 2, 2, None, 4], np.uint8, u'1', u'4', 1, 4),
+        ([1, 2, 2, None, 4], np.uint16, u'1', u'4', 1, 4),
+        ([1, 2, 2, None, 4], np.uint32, u'1', u'4', 1, 4),
+        ([1, 2, 2, None, 4], np.uint64, u'1', u'4', 1, 4),
+        ([-1, 2, 2, None, 4], np.int16, u'-1', u'4', 1, 4),
+        ([-1, 2, 2, None, 4], np.int32, u'-1', u'4', 1, 4),
+        ([-1, 2, 2, None, 4], np.int64, u'-1', u'4', 1, 4),
+        ([-1.1, 2.2, 2.3, None, 4.4], np.float32, u'-1.1', u'4.4', 1, 4),
+        ([-1.1, 2.2, 2.3, None, 4.4], np.float64, u'-1.1', u'4.4', 1, 4),
+        (
+            [u'', u'b', unichar(1000), None, u'aaa'],
+            str, u' ', frombytes((unichar(1000) + u' ').encode('utf-8')), 1, 4
+        ),
+        ([True, False, False, True, True], np.bool, u'0', u'1', 0, 5),
+    ]
+)
+def test_parquet_column_statistics_api(
+        data,
+        dtype,
+        min_value,
+        max_value,
+        null_count,
+        num_values):
+    df = pd.DataFrame({'data': data}, dtype=dtype)
+
+    fileh = make_sample_file(df)
+
+    meta = fileh.metadata
+
+    rg_meta = meta.row_group(0)
+    col_meta = rg_meta.column(0)
+
+    stat = col_meta.statistics
+    assert stat.min == min_value
+    assert stat.max == max_value
+    assert stat.null_count == null_count
+    assert stat.num_values == num_values
 
 
 @parquet
@@ -1410,3 +1458,76 @@ def test_index_column_name_duplicate(tmpdir):
     arrow_table = _read_table(path)
     result_df = arrow_table.to_pandas()
     tm.assert_frame_equal(result_df, dfx)
+
+
+def test_backwards_compatible_index_naming():
+    expected_string = b"""\
+carat        cut  color  clarity  depth  table  price     x     y     z
+ 0.23      Ideal      E      SI2   61.5   55.0    326  3.95  3.98  2.43
+ 0.21    Premium      E      SI1   59.8   61.0    326  3.89  3.84  2.31
+ 0.23       Good      E      VS1   56.9   65.0    327  4.05  4.07  2.31
+ 0.29    Premium      I      VS2   62.4   58.0    334  4.20  4.23  2.63
+ 0.31       Good      J      SI2   63.3   58.0    335  4.34  4.35  2.75
+ 0.24  Very Good      J     VVS2   62.8   57.0    336  3.94  3.96  2.48
+ 0.24  Very Good      I     VVS1   62.3   57.0    336  3.95  3.98  2.47
+ 0.26  Very Good      H      SI1   61.9   55.0    337  4.07  4.11  2.53
+ 0.22       Fair      E      VS2   65.1   61.0    337  3.87  3.78  2.49
+ 0.23  Very Good      H      VS1   59.4   61.0    338  4.00  4.05  2.39"""
+    expected = pd.read_csv(
+        io.BytesIO(expected_string), sep=r'\s{2,}', index_col=None, header=0
+    )
+    path = os.path.join(os.path.dirname(__file__), 'data', 'v0.7.1.parquet')
+    t = _read_table(path)
+    result = t.to_pandas()
+    tm.assert_frame_equal(result, expected)
+
+
+def test_backwards_compatible_index_multi_level_named():
+    expected_string = b"""\
+carat        cut  color  clarity  depth  table  price     x     y     z
+ 0.23      Ideal      E      SI2   61.5   55.0    326  3.95  3.98  2.43
+ 0.21    Premium      E      SI1   59.8   61.0    326  3.89  3.84  2.31
+ 0.23       Good      E      VS1   56.9   65.0    327  4.05  4.07  2.31
+ 0.29    Premium      I      VS2   62.4   58.0    334  4.20  4.23  2.63
+ 0.31       Good      J      SI2   63.3   58.0    335  4.34  4.35  2.75
+ 0.24  Very Good      J     VVS2   62.8   57.0    336  3.94  3.96  2.48
+ 0.24  Very Good      I     VVS1   62.3   57.0    336  3.95  3.98  2.47
+ 0.26  Very Good      H      SI1   61.9   55.0    337  4.07  4.11  2.53
+ 0.22       Fair      E      VS2   65.1   61.0    337  3.87  3.78  2.49
+ 0.23  Very Good      H      VS1   59.4   61.0    338  4.00  4.05  2.39"""
+    expected = pd.read_csv(
+        io.BytesIO(expected_string),
+        sep=r'\s{2,}', index_col=['cut', 'color', 'clarity'], header=0
+    ).sort_index()
+    path = os.path.join(
+        os.path.dirname(__file__), 'data', 'v0.7.1.all-named-index.parquet'
+    )
+    t = _read_table(path)
+    result = t.to_pandas()
+    tm.assert_frame_equal(result, expected)
+
+
+def test_backwards_compatible_index_multi_level_some_named():
+    expected_string = b"""\
+carat        cut  color  clarity  depth  table  price     x     y     z
+ 0.23      Ideal      E      SI2   61.5   55.0    326  3.95  3.98  2.43
+ 0.21    Premium      E      SI1   59.8   61.0    326  3.89  3.84  2.31
+ 0.23       Good      E      VS1   56.9   65.0    327  4.05  4.07  2.31
+ 0.29    Premium      I      VS2   62.4   58.0    334  4.20  4.23  2.63
+ 0.31       Good      J      SI2   63.3   58.0    335  4.34  4.35  2.75
+ 0.24  Very Good      J     VVS2   62.8   57.0    336  3.94  3.96  2.48
+ 0.24  Very Good      I     VVS1   62.3   57.0    336  3.95  3.98  2.47
+ 0.26  Very Good      H      SI1   61.9   55.0    337  4.07  4.11  2.53
+ 0.22       Fair      E      VS2   65.1   61.0    337  3.87  3.78  2.49
+ 0.23  Very Good      H      VS1   59.4   61.0    338  4.00  4.05  2.39"""
+    expected = pd.read_csv(
+        io.BytesIO(expected_string),
+        sep=r'\s{2,}', index_col=['cut', 'color', 'clarity'], header=0
+    ).sort_index()
+    expected.index = expected.index.set_names(['cut', None, 'clarity'])
+    path = os.path.join(
+        os.path.dirname(__file__), 'data', 'v0.7.1.some-named-index.parquet'
+    )
+    t = _read_table(path)
+    result = t.to_pandas()
+    tm.assert_frame_equal(result, expected)

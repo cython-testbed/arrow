@@ -85,15 +85,16 @@ def test_is_nested_or_struct():
     assert not types.is_nested(pa.int32())
 
 
-# TODO(wesm): Union types not yet implemented in pyarrow
+def test_is_union():
+    assert types.is_union(pa.union([pa.field('a', pa.int32()),
+                                    pa.field('b', pa.int8()),
+                                    pa.field('c', pa.string())],
+                                   pa.lib.UnionMode_SPARSE))
+    assert not types.is_union(pa.list_(pa.int32()))
 
-# def test_is_union():
-#     assert types.is_union(pa.union([pa.field('a', pa.int32()),
-#                                     pa.field('b', pa.int8()),
-#                                     pa.field('c', pa.string())]))
-#     assert not types.is_union(pa.list_(pa.int32()))
 
 # TODO(wesm): is_map, once implemented
+
 
 def test_is_binary_string():
     assert types.is_binary(pa.binary())
@@ -136,3 +137,27 @@ def test_is_temporal_date_time_timestamp():
 def test_timestamp_type():
     # See ARROW-1683
     assert isinstance(pa.timestamp('ns'), pa.TimestampType)
+
+
+def test_types_hashable():
+    types = [
+        pa.null(),
+        pa.int32(),
+        pa.time32('s'),
+        pa.time64('us'),
+        pa.date32(),
+        pa.timestamp('us'),
+        pa.string(),
+        pa.binary(),
+        pa.binary(10),
+        pa.list_(pa.int32()),
+        pa.struct([pa.field('a', pa.int32()),
+                   pa.field('b', pa.int8()),
+                   pa.field('c', pa.string())])
+    ]
+
+    in_dict = {}
+    for i, type_ in enumerate(types):
+        assert hash(type_) == hash(type_)
+        in_dict[type_] = i
+        assert in_dict[type_] == i
