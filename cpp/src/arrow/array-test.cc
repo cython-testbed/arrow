@@ -402,10 +402,6 @@ typedef ::testing::Types<PBoolean, PUInt8, PUInt16, PUInt32, PUInt64, PInt8, PIn
 
 TYPED_TEST_CASE(TestPrimitiveBuilder, Primitives);
 
-#define DECL_T() typedef typename TestFixture::T T;
-
-#define DECL_TYPE() typedef typename TestFixture::Type Type;
-
 TYPED_TEST(TestPrimitiveBuilder, TestInit) {
   DECL_TYPE();
 
@@ -2766,9 +2762,8 @@ class DecimalTest : public ::testing::TestWithParam<int> {
   template <size_t BYTE_WIDTH = 16>
   void TestCreate(int32_t precision, const DecimalVector& draw,
                   const std::vector<uint8_t>& valid_bytes, int64_t offset) const {
-    auto type = std::make_shared<DecimalType>(precision, 4);
-
-    auto builder = std::make_shared<DecimalBuilder>(type);
+    auto type = std::make_shared<Decimal128Type>(precision, 4);
+    auto builder = std::make_shared<Decimal128Builder>(type);
 
     size_t null_count = 0;
 

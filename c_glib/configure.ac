@@ -34,6 +34,19 @@ AC_CONFIG_HEADERS([config.h])
 AM_INIT_AUTOMAKE([1.13 foreign])
 AM_SILENT_RULES([yes])
 
+AC_CANONICAL_HOST
+AC_MSG_CHECKING([for macOS])
+case "$host_os" in
+darwin*)
+  os_macos=yes
+  ;;
+*)
+  os_macos=no
+  ;;
+esac
+AC_MSG_RESULT([$os_macos])
+AM_CONDITIONAL(OS_MACOS, test "$os_macos" = "yes")
+
 AC_PROG_CC
 AC_PROG_CXX
 AX_CXX_COMPILE_STDCXX_11([ext], [mandatory])
@@ -76,16 +89,25 @@ AC_ARG_WITH(arrow-cpp-build-dir,
   [GARROW_ARROW_CPP_BUILD_DIR="$withval"],
   [GARROW_ARROW_CPP_BUILD_DIR=""])
 if test "x$GARROW_ARROW_CPP_BUILD_DIR" = "x"; then
+  USE_ARROW_BUILD_DIR=no
+
   PKG_CHECK_MODULES([ARROW], [arrow arrow-compute])
   PKG_CHECK_MODULES([ARROW_GPU],
                     [arrow-gpu],
                     [HAVE_ARROW_GPU=yes],
                     [HAVE_ARROW_GPU=no])
 else
-  ARROW_INCLUDE_DIR="\$(abs_top_srcdir)/../cpp/src"
-  ARROW_LIB_DIR="${GARROW_ARROW_CPP_BUILD_DIR}/${GARROW_ARROW_CPP_BUILD_TYPE}"
+  USE_ARROW_BUILD_DIR=yes
 
-  ARROW_CFLAGS="-I${ARROW_INCLUDE_DIR}"
+  ARROW_BUILD_DIR="${GARROW_ARROW_CPP_BUILD_DIR}"
+  AC_SUBST(ARROW_BUILD_DIR)
+
+  ARROW_SOURCE_INCLUDE_DIR="\$(abs_top_srcdir)/../cpp/src"
+  ARROW_BUILD_INCLUDE_DIR="${GARROW_ARROW_CPP_BUILD_DIR}/src"
+  ARROW_LIB_DIR="${GARROW_ARROW_CPP_BUILD_DIR}/${GARROW_ARROW_CPP_BUILD_TYPE}"
+  AC_SUBST(ARROW_LIB_DIR)
+
+  ARROW_CFLAGS="-I${ARROW_BUILD_INCLUDE_DIR} -I${ARROW_SOURCE_INCLUDE_DIR}"
   ARROW_LIBS="-L${ARROW_LIB_DIR} -larrow"
   AC_SUBST(ARROW_CFLAGS)
   AC_SUBST(ARROW_LIBS)
@@ -101,6 +123,9 @@ else
   AC_SUBST(ARROW_GPU_CFLAGS)
   AC_SUBST(ARROW_GPU_LIBS)
 fi
+
+AM_CONDITIONAL([USE_ARROW_BUILD_DIR],
+               [test "$USE_ARROW_BUILD_DIR" = "yes"])
 
 AM_CONDITIONAL([HAVE_ARROW_GPU], [test "$HAVE_ARROW_GPU" = "yes"])
 if test "$HAVE_ARROW_GPU" = "yes"; then

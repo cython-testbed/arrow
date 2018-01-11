@@ -22,6 +22,7 @@ set(ARROW_SRCS
   compare.cc
   memory_pool.cc
   pretty_print.cc
+  record_batch.cc
   status.cc
   table.cc
   table_builder.cc
@@ -37,6 +38,7 @@ set(ARROW_SRCS
   util/compression.cc
   util/cpu-info.cc
   util/decimal.cc
+  util/hash.cc
   util/key_value_metadata.cc
 )
 
@@ -50,8 +52,10 @@ endif()
 if (ARROW_COMPUTE)
   add_subdirectory(compute)
   set(ARROW_SRCS ${ARROW_SRCS}
-    compute/cast.cc
     compute/context.cc
+    compute/kernels/cast.cc
+    compute/kernels/hash.cc
+    compute/kernels/util-internal.cc
   )
 endif()
 
@@ -84,6 +88,11 @@ endif()
 if (ARROW_WITH_ZSTD)
   add_definitions(-DARROW_WITH_ZSTD)
   SET(ARROW_SRCS util/compression_zstd.cc ${ARROW_SRCS})
+endif()
+
+if (ARROW_ORC)
+  add_subdirectory(adapters/orc)
+  SET(ARROW_SRCS adapters/orc/adapter.cc ${ARROW_SRCS})
 endif()
 
 if (NOT ARROW_BOOST_HEADER_ONLY)
@@ -142,6 +151,7 @@ install(FILES
   compare.h
   memory_pool.h
   pretty_print.h
+  record_batch.h
   status.h
   table.h
   table_builder.h

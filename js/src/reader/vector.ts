@@ -15,288 +15,241 @@
 // specific language governing permissions and limitations
 // under the License.
 
-import { flatbuffers } from 'flatbuffers';
-import { MessageBatch } from './message';
-import * as Schema_ from '../format/Schema_generated';
-import * as Message_ from '../format/Message_generated';
-import { IteratorState, Dictionaries } from './arrow';
+import * as Schema_ from '../format/fb/Schema';
+import { TypedArray, TypedArrayConstructor } from '../vector/types';
+import { Schema, RecordBatch, DictionaryBatch, Field, FieldNode } from '../format/arrow';
+import { Int, Date, Time, Timestamp, Decimal, FixedSizeList, FixedSizeBinary, FloatingPoint } from '../format/arrow';
 import {
-    Vector, Column,
-    IntArray, FloatArray,
-    TypedArray, TypedArrayConstructor,
-} from '../types/types';
-
-import {
-    DictionaryVector,
-    Utf8Vector, StructVector,
-    ListVector, FixedSizeListVector,
-    DateVector, Float32Vector, Float64Vector,
+    Vector, BoolVector, BinaryVector, DictionaryVector,
     Int8Vector, Int16Vector, Int32Vector, Int64Vector,
     Uint8Vector, Uint16Vector, Uint32Vector, Uint64Vector,
-} from '../types/arrow';
+    Utf8Vector, ListVector, FixedSizeListVector, StructVector,
+    Float16Vector, Float32Vector, Float64Vector, DecimalVector,
+    Date32Vector, Date64Vector, Time32Vector, Time64Vector, TimestampVector,
+} from '../vector/arrow';
 
-import Int = Schema_.org.apache.arrow.flatbuf.Int;
 import Type = Schema_.org.apache.arrow.flatbuf.Type;
-import Field = Schema_.org.apache.arrow.flatbuf.Field;
-import FieldNode = Message_.org.apache.arrow.flatbuf.FieldNode;
+import DateUnit = Schema_.org.apache.arrow.flatbuf.DateUnit;
+import TimeUnit = Schema_.org.apache.arrow.flatbuf.TimeUnit;
 import Precision = Schema_.org.apache.arrow.flatbuf.Precision;
-import VectorType = Schema_.org.apache.arrow.flatbuf.VectorType;
-import VectorLayout = Schema_.org.apache.arrow.flatbuf.VectorLayout;
-import FixedSizeList = Schema_.org.apache.arrow.flatbuf.FixedSizeList;
-import FloatingPoint = Schema_.org.apache.arrow.flatbuf.FloatingPoint;
-import DictionaryEncoding = Schema_.org.apache.arrow.flatbuf.DictionaryEncoding;
+// import IntervalUnit = Schema_.org.apache.arrow.flatbuf.IntervalUnit;
 
-export function readVector<T>(field: Field, batch: MessageBatch, state: IteratorState, dictionaries: Dictionaries): Column<T> | DictionaryVector<T> | null {
-    return readDictionaryVector<T>(field, batch, state, dictionaries) ||
-                readTypedVector<T>(field, batch, state, dictionaries);
-}
-
-function readTypedVector<T>(field: Field, batch: MessageBatch, iterator: IteratorState, dictionaries: Dictionaries): Column<T> | DictionaryVector<T> | null {
-    let typeType = field.typeType(), readTyped = typedVectorReaders[typeType];
-    if (!readTyped) {
-        throw new Error('Unrecognized vector name "' + Type[typeType] + '" type "' + typeType + '"');
-    }
-    return readTyped(field, batch, iterator, dictionaries) as Column<T>;
-}
-
-function readDictionaryVector<T>(field: Field, batch: MessageBatch, iterator: IteratorState, dictionaries: Dictionaries): DictionaryVector<T> | null {
-    let data: Vector<any>, encoding: DictionaryEncoding;
-    if (dictionaries &&
-        (encoding = field.dictionary()!) &&
-        (data = dictionaries[encoding.id().toFloat64().toString()])) {
-        let indexType =  encoding.indexType() ||
-            /* a dictionary index defaults to signed 32 bit int if unspecified */
-            { bitWidth: () => 32, isSigned: () => true };
-        // workaround for https://issues.apache.org/jira/browse/ARROW-1363
-        let indexField = createSyntheticDictionaryIndexField(field, indexType);
-        let keys = readIntVector(indexField, batch, iterator, null, indexType)!;
-        return new DictionaryVector<T>({ data, keys: keys! });
-    }
-    return null;
-}
-
-const IntViews    = [Int8Array,    Int16Array,   Int32Array,   Int32Array  ];
-const Int32Views  = [Int32Array,   Int32Array,   Int32Array,   Int32Array  ];
-const UintViews   = [Uint8Array,   Uint16Array,  Uint32Array,  Uint32Array ];
-const Uint8Views  = [Uint8Array,   Uint8Array,   Uint8Array,   Uint8Array  ];
-const Uint32Views = [Uint32Array,  Uint32Array,  Uint32Array,  Uint32Array ];
-const FloatViews  = [Int8Array,    Int16Array,   Float32Array, Float64Array];
-
-const createIntDataViews = createTypedArray.bind(null, IntViews, null);
-const createUintDataViews = createTypedArray.bind(null, UintViews, null);
-const createDateDataViews = createTypedArray.bind(null, Uint32Views, null);
-const createFloatDataViews = createTypedArray.bind(null, FloatViews, null);
-const createNestedDataViews = createTypedArray.bind(null, Uint32Views, null);
-const createValidityDataViews = createTypedArray.bind(null, Uint8Views, null);
-const createUtf8DataViews = createTypedArray.bind(null, Uint8Views, Int32Views);
-
-// Define as computed properties for closure-compiler
-const floatVectors = {
-    [Precision.HALF]: Float32Vector,
-    [Precision.SINGLE]: Float32Vector,
-    [Precision.DOUBLE]: Float64Vector,
-} as { [k: number]: any };
-
-// and again as string-indexed keys for Uglify...
-floatVectors[Precision['HALF']] = Float32Vector;
-floatVectors[Precision['SINGLE']] = Float32Vector;
-floatVectors[Precision['DOUBLE']] = Float64Vector;
-
-const intVectors = [
-    [/* unsigned */ Uint8Vector,   /* signed */ Int8Vector ],
-    [/* unsigned */ Uint16Vector,  /* signed */ Int16Vector],
-    [/* unsigned */ Uint32Vector,  /* signed */ Int32Vector],
-    [/* unsigned */ Uint64Vector,  /* signed */ Int64Vector]
-] as any[][];
-
-function readIntVector(field: Field, batch: MessageBatch, iterator: IteratorState, dictionaries: Dictionaries, primitiveType?: PrimitiveType) {
-    let type = (primitiveType || field.type(new Int())!);
-    return type.isSigned() ?
-        read_IntVector(field, batch, iterator, dictionaries, type) :
-        readUintVector(field, batch, iterator, dictionaries, type);
-}
-
-function read_IntVector(field: Field, batch: MessageBatch, iterator: IteratorState, dictionaries: Dictionaries, primitiveType?: PrimitiveType) {
-    return readVectorLayout(createIntDataViews, createIntVector, field, batch, iterator, dictionaries, primitiveType);
-}
-
-function readUintVector(field: Field, batch: MessageBatch, iterator: IteratorState, dictionaries: Dictionaries, primitiveType?: PrimitiveType) {
-    return readVectorLayout(createUintDataViews, createIntVector, field, batch, iterator, dictionaries, primitiveType);
-}
-
-function createIntVector(argv: VectorFactoryArgv<IntArray>) {
-    let { field, fieldNode, data, validity, offsets, primitiveType } = argv;
-    let type = primitiveType || field.type(new Int())!, bitWidth = type.bitWidth();
-    let IntVector = valueForBitWidth(bitWidth, intVectors)[+type.isSigned()];
-    return new IntVector({ fieldNode, field, validity, data: data! || offsets! });
-    // ---------------------------------------------------- 👆:
-    // Workaround for https://issues.apache.org/jira/browse/ARROW-1363
-    // This bug causes dictionary encoded vector indicies' IntVector data
-    // buffers to be tagged as VectorType.OFFSET (0) in the field metadata
-    // instead of VectorType.DATA. The `readVectorLayout` routine strictly
-    // obeys the types in the field metadata, so if we're parsing an Arrow
-    // file written by a version of the library published before ARROW-1363
-    // was fixed, the IntVector's data buffer will be null, and the offset
-    // buffer will be the actual data. If data is null, it's safe to assume
-    // the offset buffer is the data, because IntVectors don't have offsets.
-}
-
-function bindVectorReader<T extends TypedArray, V>(createBufferView: BufferViewFactory<T>, createVector: VectorFactory<T, V>) {
-    return function readVector(field: Field, batch: MessageBatch, iterator: IteratorState, dictionaries: Dictionaries, primitiveType?: PrimitiveType) {
-        return readVectorLayout(createBufferView, createVector, field, batch, iterator, dictionaries, primitiveType);
-    };
-}
-
-const readFloatVector = bindVectorReader(createFloatDataViews, ({ field, fieldNode, data, validity }: VectorFactoryArgv<FloatArray>) => {
-    const type = field.type(new FloatingPoint())!;
-    const FloatVector = floatVectors[type.precision()];
-    return new FloatVector({ field, fieldNode, validity, data: data! });
-});
-
-const readDateVector = bindVectorReader(createDateDataViews, ({ field, fieldNode, data, validity }: VectorFactoryArgv<Uint32Array>) => {
-    return new DateVector({ field, fieldNode, validity, data: data! });
-});
-
-const readUtf8Vector = bindVectorReader(createUtf8DataViews, ({ field, fieldNode, data, offsets, validity }: VectorFactoryArgv<Uint8Array>) => {
-    return new Utf8Vector({
-        field, fieldNode,
-        values: new ListVector({
-            validity,
-            offsets: offsets as Int32Array,
-            values: new Uint8Vector({ data: data! })
-        }) as any as Vector<Uint8Array | null>
-    });
-});
-
-const readListVector = bindVectorReader(createNestedDataViews, ({ field, fieldNode, offsets, validity, iterator, messageBatch, dictionaries }: VectorFactoryArgv<TypedArray>) => {
-    return new ListVector({
-        field, fieldNode, validity,
-        offsets: offsets! as Int32Array,
-        values: readVector(field.children(0)!, messageBatch, iterator, dictionaries)!
-    });
-});
-
-const readFixedSizeListVector = bindVectorReader(createNestedDataViews, ({ field, fieldNode, validity, iterator, messageBatch, dictionaries }: VectorFactoryArgv<Uint32Array>) => {
-    return new FixedSizeListVector({
-        field, fieldNode, validity,
-        listSize: field.type(new FixedSizeList())!.listSize(),
-        values: readVector(field.children(0)!, messageBatch, iterator, dictionaries)!
-    });
-});
-
-const readStructVector = bindVectorReader(createNestedDataViews, ({ field, fieldNode, validity, iterator, messageBatch, dictionaries }: VectorFactoryArgv<ArrayLike<any>>) => {
-    let columns: Column<any>[] = [];
-    for (let i = -1, n = field.childrenLength(); ++i < n;) {
-        columns[i] = readVector<any>(field.children(i)!, messageBatch, iterator, dictionaries) as Column<any>;
-    }
-    return new StructVector({ field, fieldNode, validity, columns });
-});
-
-// Define as computed properties for closure-compiler
-const typedVectorReaders = {
-    [Type.Int]: readIntVector,
-    [Type.Date]: readDateVector,
-    [Type.List]: readListVector,
-    [Type.Utf8]: readUtf8Vector,
-    [Type.Struct_]: readStructVector,
-    [Type.FloatingPoint]: readFloatVector,
-    [Type.FixedSizeList]: readFixedSizeListVector,
-} as { [k: number]: (...args: any[]) => Vector | null };
-
-// and again as string-indexed keys for Uglify...
-typedVectorReaders[Type['Int']] = readIntVector;
-typedVectorReaders[Type['Date']] = readDateVector;
-typedVectorReaders[Type['List']] = readListVector;
-typedVectorReaders[Type['Utf8']] = readUtf8Vector;
-typedVectorReaders[Type['Struct_']] = readStructVector;
-typedVectorReaders[Type['FloatingPoint']] = readFloatVector;
-typedVectorReaders[Type['FixedSizeList']] = readFixedSizeListVector;
-
-type VectorFactory<T, V> = (argv: VectorFactoryArgv<T>) => V;
-type PrimitiveType = { bitWidth(): number; isSigned(): boolean };
-type BufferViewFactory<T extends TypedArray> = (batch: MessageBatch, type: VectorType, bitWidth: number, offset: number, length: number) => T;
-
-interface VectorFactoryArgv<T> {
-    field: Field;
+export interface ContainerLayout {
     fieldNode: FieldNode;
-    iterator: IteratorState;
-    dictionaries: Dictionaries;
-    messageBatch: MessageBatch;
-    data?: T;
-    offsets?: TypedArray;
-    validity?: Uint8Array;
-    primitiveType?: PrimitiveType;
+    validity: Uint8Array | null | void;
 }
 
-function readVectorLayout<T extends TypedArray, V>(
-    createBufferView: BufferViewFactory<T>, createVector: VectorFactory<T, V>,
-    field: Field, messageBatch: MessageBatch, iterator: IteratorState, dictionaries: Dictionaries, primitiveType?: PrimitiveType
-) {
-    let fieldNode: FieldNode, recordBatch = messageBatch.data;
-    if (!(fieldNode = recordBatch.nodes(iterator.nodeIndex)!)) {
+export interface VariableWidthLayout {
+    fieldNode: FieldNode;
+    offsets: Int32Array;
+    validity: Uint8Array | null | void;
+}
+
+export interface BinaryLayout extends FixedWidthLayout<Uint8Array> {
+    offsets: Int32Array;
+}
+
+export interface FixedWidthLayout<T extends TypedArray> {
+    fieldNode: FieldNode;
+    data: T;
+    validity: Uint8Array | null | void;
+}
+
+export function* readVectors(messages: Iterable<{ schema: Schema, message: RecordBatch | DictionaryBatch, reader: VectorLayoutReader }>) {
+    const dictionaries = new Map<string, Vector>();
+    for (const { schema, message, reader } of messages) {
+        yield* readMessageVectors(schema, message, new VectorReader(dictionaries, reader));
+    }
+}
+
+export async function* readVectorsAsync(messages: AsyncIterable<{ schema: Schema, message: RecordBatch | DictionaryBatch, reader: VectorLayoutReader }>) {
+    const dictionaries = new Map<string, Vector>();
+    for await (const { schema, message, reader } of messages) {
+        yield* readMessageVectors(schema, message, new VectorReader(dictionaries, reader));
+    }
+}
+
+function* readMessageVectors(schema: Schema, message: RecordBatch | DictionaryBatch, reader: VectorReader) {
+    if (message.isRecordBatch() === true) {
+        yield schema.fields.map((field) => reader.readVector(field));
+    } else if (message.isDictionaryBatch()) {
+        let id = message.dictionaryId.toFloat64().toString();
+        let vector = reader.readValueVector(schema.dictionaries.get(id)!);
+        if (message.isDelta) {
+            vector = reader.dictionaries.get(id)!.concat(vector);
+        }
+        reader.dictionaries.set(id, vector);
+    }
+}
+
+export interface VectorLayoutReader {
+    readBinaryLayout(field: Field): BinaryLayout;
+    readContainerLayout(field: Field): ContainerLayout;
+    readVariableWidthLayout(field: Field): VariableWidthLayout;
+    readFixedWidthLayout<T extends TypedArray>(field: Field, TypedArrayConstructor: TypedArrayConstructor<T>): FixedWidthLayout<T>;
+}
+
+export class VectorReader implements VectorLayoutReader {
+    constructor(public dictionaries: Map<string, Vector>, protected layout: VectorLayoutReader) {}
+    readVector(field: Field): Vector {
+        return this.readDictionaryVector(field) || this.readValueVector(field);
+    }
+    readDictionaryVector(field: Field) {
+        const encoding = field.dictionary;
+        if (encoding) {
+            const keys = this.readIntVector(field.indexField());
+            const data = this.dictionaries.get(encoding.dictionaryId.toFloat64().toString())!;
+            return new DictionaryVector({
+                field, data, keys,
+                validity: (keys as any).validity,
+                fieldNode: (keys as any).fieldNode,
+            });
+        }
         return null;
     }
-    iterator.nodeIndex += 1;
-    let type, bitWidth, layout, buffer, bufferLength;
-    let data: T | undefined, offsets: TypedArray | undefined, validity: Uint8Array | undefined;
-    for (let i = -1, n = field.layoutLength(); ++i < n;) {
-        if (!(layout = field.layout(i)!) ||
-            !(buffer = recordBatch.buffers(iterator.bufferIndex)!)) {
-            continue;
+    readValueVector(field: Field) {
+        switch (field.typeType) {
+            case Type.NONE: return this.readNullVector();
+            case Type.Null: return this.readNullVector();
+            // case Type.Map: return this.readMapVector(field);
+            case Type.Int: return this.readIntVector(field);
+            case Type.Bool: return this.readBoolVector(field);
+            case Type.Date: return this.readDateVector(field);
+            case Type.List: return this.readListVector(field);
+            case Type.Utf8: return this.readUtf8Vector(field);
+            case Type.Time: return this.readTimeVector(field);
+            // case Type.Union: return this.readUnionVector(field);
+            case Type.Binary: return this.readBinaryVector(field);
+            case Type.Decimal: return this.readDecimalVector(field);
+            case Type.Struct_: return this.readStructVector(field);
+            case Type.FloatingPoint: return this.readFloatVector(field);
+            case Type.Timestamp: return this.readTimestampVector(field);
+            case Type.FixedSizeList: return this.readFixedSizeListVector(field);
+            case Type.FixedSizeBinary: return this.readFixedSizeBinaryVector(field);
         }
-        iterator.bufferIndex += 1;
-        if ((type = layout.type()) === VectorType.TYPE ||
-            (bufferLength = buffer.length().low) <= 0  ||
-            (bitWidth = layout.bitWidth()) <= 0) {
-            continue;
-        } else if (type === VectorType.DATA) {
-            data = createBufferView(messageBatch, type, bitWidth, buffer.offset().low, bufferLength);
-        } else if (type === VectorType.OFFSET) {
-            offsets = createBufferView(messageBatch, type, bitWidth, buffer.offset().low, bufferLength);
-        } else if (fieldNode.nullCount().low > 0) {
-            validity = createValidityDataViews(messageBatch, type, bitWidth, buffer.offset().low, fieldNode.length().low);
+        throw new Error(`Unrecognized ${field.toString()}`);
+    }
+    readNullVector() {
+        return new Vector();
+    }
+    readBoolVector(field: Field) {
+        return new BoolVector(this.readFixedWidthLayout(field, Uint8Array));
+    }
+    readDateVector(field: Field) {
+        const type = field.type as Date;
+        switch (type.unit) {
+            case DateUnit.DAY: return new Date32Vector({ ...this.readFixedWidthLayout(field, Int32Array), unit: DateUnit[type.unit] });
+            case DateUnit.MILLISECOND: return new Date64Vector({ ...this.readFixedWidthLayout(field, Int32Array), unit: DateUnit[type.unit] });
         }
+        throw new Error(`Unrecognized ${type.toString()}`);
     }
-    return createVector({ data, offsets, validity, field, fieldNode, iterator, messageBatch, dictionaries, primitiveType });
-}
-
-function createTypedArray(
-    bufferViews: TypedArrayConstructor[], offsetViews: TypedArrayConstructor[] | null,
-    batch: MessageBatch, type: VectorType, bitWidth: number, offset: number, length: number
-) {
-    const buffer = batch.bytes.buffer;
-    const byteLength = buffer.byteLength;
-    const byteOffset = batch.offset + offset;
-    const DataViewType = valueForBitWidth(bitWidth, type === VectorType.OFFSET && offsetViews || bufferViews);
-    const dataViewLength = ((byteOffset + length) <= byteLength
-        ? length
-        : byteLength - byteOffset
-    ) / DataViewType['BYTES_PER_ELEMENT'];
-    return new DataViewType(buffer, byteOffset, dataViewLength);
-}
-
-function valueForBitWidth<T>(bitWidth: number, values: T[]) {
-    return values[bitWidth >> 4] || values[3];
-}
-
-function createSyntheticDictionaryIndexField(field: Field, type: PrimitiveType) {
-    let layouts = [] as VectorLayout[];
-    let builder = new flatbuffers.Builder();
-    if (field.nullable()) {
-        VectorLayout.startVectorLayout(builder);
-        VectorLayout.addBitWidth(builder, 8);
-        VectorLayout.addType(builder, VectorType.VALIDITY);
-        builder.finish(VectorLayout.endVectorLayout(builder));
-        layouts.push(VectorLayout.getRootAsVectorLayout(builder.dataBuffer()));
-        builder = new flatbuffers.Builder();
+    readTimeVector(field: Field) {
+        const type = field.type as Time;
+        switch (type.bitWidth) {
+            case 32: return new Time32Vector({ ...this.readFixedWidthLayout(field, Int32Array), unit: TimeUnit[type.unit] });
+            case 64: return new Time64Vector({ ...this.readFixedWidthLayout(field, Uint32Array), unit: TimeUnit[type.unit] });
+        }
+        throw new Error(`Unrecognized ${type.toString()}`);
     }
-    VectorLayout.startVectorLayout(builder);
-    VectorLayout.addBitWidth(builder, type.bitWidth());
-    VectorLayout.addType(builder, VectorType.DATA);
-    builder.finish(VectorLayout.endVectorLayout(builder));
-    layouts.push(VectorLayout.getRootAsVectorLayout(builder.dataBuffer()));
-    return Object.create(field, {
-        layout: { value(i: number) { return layouts[i]; } },
-        layoutLength: { value() { return layouts.length; } }
-    });
+    readTimestampVector(field: Field) {
+        const type = field.type as Timestamp;
+        const { fieldNode, validity, data } = this.readFixedWidthLayout(field, Uint32Array);
+        return new TimestampVector({
+            field, fieldNode, validity, data,
+            timezone: type.timezone!,
+            unit: TimeUnit[type.unit],
+        });
+    }
+    readListVector(field: Field) {
+        const { fieldNode, validity, offsets } = this.readVariableWidthLayout(field);
+        return new ListVector({
+            field, fieldNode, validity, offsets,
+            values: this.readVector(field.children[0])
+        });
+    }
+    readStructVector(field: Field) {
+        const { fieldNode, validity } = this.readContainerLayout(field);
+        return new StructVector({
+            field, fieldNode, validity,
+            columns: field.children.map((field) => this.readVector(field))
+        });
+    }
+    readBinaryVector(field: Field) {
+        return new BinaryVector(this.readBinaryLayout(field));
+    }
+    readDecimalVector(field: Field) {
+        const type = field.type as Decimal;
+        const { fieldNode, validity, data } = this.readFixedWidthLayout(field, Uint32Array);
+        return new DecimalVector({
+            scale: type.scale,
+            precision: type.precision,
+            field, fieldNode, validity, data
+        });
+    }
+    readUtf8Vector(field: Field) {
+        const { fieldNode, validity, offsets, data } = this.readBinaryLayout(field);
+        return new Utf8Vector({
+            field, fieldNode,
+            values: new BinaryVector({
+                validity, offsets, data
+            })
+        });
+    }
+    readFixedSizeListVector(field: Field) {
+        const type = field.type as FixedSizeList;
+        const { fieldNode, validity } = this.readContainerLayout(field);
+        return new FixedSizeListVector({
+            field, fieldNode, validity,
+            size: type.listSize,
+            values: this.readVector(field.children[0])
+        });
+    }
+    readFixedSizeBinaryVector(field: Field) {
+        const type = field.type as FixedSizeBinary;
+        const { fieldNode, validity, data } = this.readFixedWidthLayout(field, Uint8Array);
+        return new FixedSizeListVector({
+            size: type.byteWidth,
+            field, fieldNode, validity,
+            values: new Uint8Vector({ data })
+        });
+    }
+    readFloatVector(field: Field) {
+        const type = field.type as FloatingPoint;
+        switch (type.precision) {
+            case Precision.HALF:   return new Float16Vector(this.readFixedWidthLayout(field, Uint16Array));
+            case Precision.SINGLE: return new Float32Vector(this.readFixedWidthLayout(field, Float32Array));
+            case Precision.DOUBLE: return new Float64Vector(this.readFixedWidthLayout(field, Float64Array));
+        }
+        throw new Error(`Unrecognized FloatingPoint { precision: ${type.precision} }`);
+    }
+    readIntVector(field: Field) {
+        const type = field.type as Int;
+        if (type.isSigned) {
+            switch (type.bitWidth) {
+                case  8: return new  Int8Vector(this.readFixedWidthLayout(field, Int8Array));
+                case 16: return new Int16Vector(this.readFixedWidthLayout(field, Int16Array));
+                case 32: return new Int32Vector(this.readFixedWidthLayout(field, Int32Array));
+                case 64: return new Int64Vector(this.readFixedWidthLayout(field, Int32Array));
+            }
+        }
+        switch (type.bitWidth) {
+            case  8: return new  Uint8Vector(this.readFixedWidthLayout(field, Uint8Array));
+            case 16: return new Uint16Vector(this.readFixedWidthLayout(field, Uint16Array));
+            case 32: return new Uint32Vector(this.readFixedWidthLayout(field, Uint32Array));
+            case 64: return new Uint64Vector(this.readFixedWidthLayout(field, Uint32Array));
+        }
+        throw new Error(`Unrecognized Int { isSigned: ${type.isSigned}, bitWidth: ${type.bitWidth} }`);
+    }
+    readContainerLayout(field: Field) {
+        return this.layout.readContainerLayout(field);
+    }
+    readBinaryLayout(field: Field) {
+        return this.layout.readBinaryLayout(field);
+    }
+    readVariableWidthLayout(field: Field) {
+        return this.layout.readVariableWidthLayout(field);
+    }
+    readFixedWidthLayout<T extends TypedArray>(field: Field, TypedArrayConstructor: TypedArrayConstructor<T>) {
+        return this.layout.readFixedWidthLayout(field, TypedArrayConstructor);
+    }
 }

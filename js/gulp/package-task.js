@@ -48,12 +48,17 @@ const createMainPackageJson = (target, format) => (orig) => ({
     module: `${mainExport}.mjs`,
     browser: `${mainExport}.es5.min.js`,
     [`browser:es2015`]: `${mainExport}.es2015.min.js`,
-    [`@std/esm`]: { esm: `mjs` },
+    [`@std/esm`]: { esm: `mjs` }
 });
   
 const createTypeScriptPackageJson = (target, format) => (orig) => ({
     ...createScopedPackageJSON(target, format)(orig),
-    main: `${mainExport}.ts`, types: `${mainExport}.ts`
+    main: `${mainExport}.ts`, types: `${mainExport}.ts`,
+    dependencies: {
+        '@types/flatbuffers': '*',
+        '@types/node': '*',
+        ...orig.dependencies
+    }
 });
   
 const createScopedPackageJSON = (target, format) => (({ name, ...orig }) =>

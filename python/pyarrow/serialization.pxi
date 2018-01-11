@@ -59,6 +59,22 @@ cdef class SerializationContext:
         self.custom_serializers = dict()
         self.custom_deserializers = dict()
 
+    def clone(self):
+        """
+        Return copy of this SerializationContext
+
+        Returns
+        -------
+        clone : SerializationContext
+        """
+        result = SerializationContext()
+        result.type_to_type_id = self.type_to_type_id.copy()
+        result.whitelisted_types = self.whitelisted_types.copy()
+        result.custom_serializers = self.custom_serializers.copy()
+        result.custom_deserializers = self.custom_deserializers.copy()
+
+        return result
+
     def register_type(self, type_, type_id, pickle=False,
                       custom_serializer=None, custom_deserializer=None):
         """EXPERIMENTAL: Add type to the list of types we can serialize.
@@ -146,6 +162,30 @@ cdef class SerializationContext:
                     obj.__dict__.update(serialized_obj)
         return obj
 
+    def serialize(self, obj):
+        """
+        Call pyarrow.serialize and pass this SerializationContext
+        """
+        return serialize(obj, context=self)
+
+    def serialize_to(self, object value, sink):
+        """
+        Call pyarrow.serialize_to and pass this SerializationContext
+        """
+        return serialize_to(value, sink, context=self)
+
+    def deserialize(self, what):
+        """
+        Call pyarrow.deserialize and pass this SerializationContext
+        """
+        return deserialize(what, context=self)
+
+    def deserialize_components(self, what):
+        """
+        Call pyarrow.deserialize_components and pass this SerializationContext
+        """
+        return deserialize_components(what, context=self)
+
 
 _default_serialization_context = SerializationContext()
 
@@ -165,7 +205,7 @@ cdef class SerializedPyObject:
         def __get__(self):
             cdef CMockOutputStream mock_stream
             with nogil:
-                check_status(WriteSerializedObject(self.data, &mock_stream))
+                check_status(self.data.WriteTo(&mock_stream))
 
             return mock_stream.GetExtentBytesWritten()
 
@@ -179,7 +219,7 @@ cdef class SerializedPyObject:
 
     cdef _write_to(self, OutputStream* stream):
         with nogil:
-            check_status(WriteSerializedObject(self.data, stream))
+            check_status(self.data.WriteTo(stream))
 
     def deserialize(self, SerializationContext context=None):
         """
@@ -208,6 +248,46 @@ cdef class SerializedPyObject:
             sink.set_memcopy_threads(nthreads)
         self.write_to(sink)
         return output
+
+    @staticmethod
+    def from_components(components):
+        """
+        Reconstruct SerializedPyObject from output of
+        SerializedPyObject.to_components
+        """
+        cdef:
+            int num_tensors = components['num_tensors']
+            int num_buffers = components['num_buffers']
+            list buffers = components['data']
+            SerializedPyObject result = SerializedPyObject()
+
+        with nogil:
+            check_status(GetSerializedFromComponents(num_tensors, num_buffers,
+                                                     buffers, &result.data))
+
+        return result
+
+    def to_components(self, memory_pool=None):
+        """
+        Return the decomposed dict representation of the serialized object
+        containing a collection of Buffer objects which maximize opportunities
+        for zero-copy
+
+        Parameters
+        ----------
+        memory_pool : MemoryPool default None
+            Pool to use for necessary allocations
+
+        Returns
+
+        """
+        cdef PyObject* result
+        cdef CMemoryPool* c_pool = maybe_unbox_memory_pool(memory_pool)
+
+        with nogil:
+            check_status(self.data.GetComponents(c_pool, &result))
+
+        return PyObject_to_object(result)
 
 
 def serialize(object value, SerializationContext context=None):
@@ -298,6 +378,24 @@ def deserialize_from(source, object base, SerializationContext context=None):
         Python object for the deserialized sequence.
     """
     serialized = read_serialized(source, base=base)
+    return serialized.deserialize(context)
+
+
+def deserialize_components(components, SerializationContext context=None):
+    """
+    Reconstruct Python object from output of SerializedPyObject.to_components
+
+    Parameters
+    ----------
+    components : dict
+        Output of SerializedPyObject.to_components
+    context : SerializationContext, default None
+
+    Returns
+    -------
+    object : the Python object that was originally serialized
+    """
+    serialized = SerializedPyObject.from_components(components)
     return serialized.deserialize(context)
 
 

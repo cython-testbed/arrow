@@ -26,11 +26,13 @@
 #include <string>
 #include <unordered_map>
 
+#include "arrow/buffer.h"
 #include "arrow/status.h"
 #include "arrow/util/visibility.h"
 #include "plasma/common.h"
 
 using arrow::Status;
+using arrow::Buffer;
 
 namespace plasma {
 
@@ -41,14 +43,16 @@ constexpr int64_t kL3CacheSizeBytes = 100000000;
 
 /// Object buffer data structure.
 struct ObjectBuffer {
+  /// The data buffer.
+  std::shared_ptr<Buffer> data;
   /// The size in bytes of the data object.
   int64_t data_size;
-  /// The address of the data object.
-  uint8_t* data;
+  /// The metadata buffer.
+  std::shared_ptr<Buffer> metadata;
   /// The metadata size in bytes.
   int64_t metadata_size;
-  /// The address of the metadata.
-  uint8_t* metadata;
+  /// The device number.
+  int device_num;
 };
 
 /// Configuration options for the plasma client.
@@ -107,11 +111,11 @@ class ARROW_EXPORT PlasmaClient {
   ///        should be NULL.
   /// \param metadata_size The size in bytes of the metadata. If there is no
   ///        metadata, this should be 0.
-  /// \param data The address of the newly created object will be written here.
+  /// \param data A buffer containing the address of the newly created object
+  ///        will be written here.
   /// \return The return status.
   Status Create(const ObjectID& object_id, int64_t data_size, uint8_t* metadata,
-                int64_t metadata_size, uint8_t** data);
-
+                int64_t metadata_size, std::shared_ptr<Buffer>* data);
   /// Get some objects from the Plasma Store. This function will block until the
   /// objects have all been created and sealed in the Plasma Store or the
   /// timeout
@@ -170,7 +174,8 @@ class ARROW_EXPORT PlasmaClient {
   Status Seal(const ObjectID& object_id);
 
   /// Delete an object from the object store. This currently assumes that the
-  /// object is present and has been sealed.
+  /// object is present, has been sealed and not used by another client. Otherwise,
+  /// it is a no operation.
   ///
   /// @todo We may want to allow the deletion of objects that are not present or
   ///       haven't been sealed.
@@ -313,7 +318,7 @@ class ARROW_EXPORT PlasmaClient {
   ///
   /// \return The file descriptor for the manager connection. If there is no
   ///         connection to the manager, this is -1.
-  int get_manager_fd();
+  int get_manager_fd() const;
 
  private:
   /// This is a helper method for unmapping objects for which all references have

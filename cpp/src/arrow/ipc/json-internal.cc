@@ -28,8 +28,8 @@
 #include "arrow/array.h"
 #include "arrow/builder.h"
 #include "arrow/ipc/dictionary.h"
+#include "arrow/record_batch.h"
 #include "arrow/status.h"
-#include "arrow/table.h"
 #include "arrow/type.h"
 #include "arrow/type_traits.h"
 #include "arrow/util/bit-util.h"
@@ -40,24 +40,11 @@
 
 namespace arrow {
 namespace ipc {
-namespace json {
 namespace internal {
+namespace json {
 
-static std::string GetBufferTypeName(BufferType type) {
-  switch (type) {
-    case BufferType::DATA:
-      return "DATA";
-    case BufferType::OFFSET:
-      return "OFFSET";
-    case BufferType::TYPE:
-      return "TYPE";
-    case BufferType::VALIDITY:
-      return "VALIDITY";
-    default:
-      break;
-  }
-  return "UNKNOWN";
-}
+using ::arrow::ipc::DictionaryMemo;
+using ::arrow::ipc::DictionaryTypeMap;
 
 static std::string GetFloatingPrecisionName(FloatingPoint::Precision precision) {
   switch (precision) {
@@ -125,8 +112,8 @@ class SchemaWriter {
 
     // Make a dummy record batch. A bit tedious as we have to make a schema
     auto schema = ::arrow::schema({arrow::field("dictionary", dictionary->type())});
-    RecordBatch batch(schema, dictionary->length(), {dictionary});
-    RETURN_NOT_OK(WriteRecordBatch(batch, writer_));
+    auto batch = RecordBatch::Make(schema, dictionary->length(), {dictionary});
+    RETURN_NOT_OK(WriteRecordBatch(*batch, writer_));
     writer_->EndObject();
     return Status::OK();
   }
@@ -174,12 +161,9 @@ class SchemaWriter {
       RETURN_NOT_OK(WriteDictionaryMetadata(dict_type));
 
       const DataType& dictionary_type = *dict_type.dictionary()->type();
-      const DataType& index_type = *dict_type.index_type();
       RETURN_NOT_OK(WriteChildren(dictionary_type.children()));
-      WriteBufferLayout(index_type.GetBufferLayout());
     } else {
       RETURN_NOT_OK(WriteChildren(type.children()));
-      WriteBufferLayout(type.GetBufferLayout());
     }
 
     writer_->EndObject();
@@ -253,7 +237,7 @@ class SchemaWriter {
     writer_->Int(type.byte_width());
   }
 
-  void WriteTypeMetadata(const DecimalType& type) {
+  void WriteTypeMetadata(const Decimal128Type& type) {
     writer_->Key("precision");
     writer_->Int(type.precision());
     writer_->Key("scale");
@@ -301,26 +285,6 @@ class SchemaWriter {
     return Status::OK();
   }
 
-  void WriteBufferLayout(const std::vector<BufferDescr>& buffer_layout) {
-    writer_->Key("typeLayout");
-    writer_->StartObject();
-    writer_->Key("vectors");
-    writer_->StartArray();
-
-    for (const BufferDescr& buffer : buffer_layout) {
-      writer_->StartObject();
-      writer_->Key("type");
-      writer_->String(GetBufferTypeName(buffer.type()));
-
-      writer_->Key("typeBitWidth");
-      writer_->Int(buffer.bit_width());
-
-      writer_->EndObject();
-    }
-    writer_->EndArray();
-    writer_->EndObject();
-  }
-
   Status WriteChildren(const std::vector<std::shared_ptr<Field>>& children) {
     writer_->Key("children");
     writer_->StartArray();
@@ -347,7 +311,7 @@ class SchemaWriter {
     return WritePrimitive("fixedsizebinary", type);
   }
 
-  Status Visit(const DecimalType& type) { return WritePrimitive("decimal", type); }
+  Status Visit(const Decimal128Type& type) { return WritePrimitive("decimal", type); }
   Status Visit(const TimestampType& type) { return WritePrimitive("timestamp", type); }
   Status Visit(const IntervalType& type) { return WritePrimitive("interval", type); }
 
@@ -1063,7 +1027,7 @@ class ArrayReader {
 
   template <typename T>
   typename std::enable_if<std::is_base_of<FixedSizeBinaryType, T>::value &&
-                              !std::is_base_of<DecimalType, T>::value,
+                              !std::is_base_of<Decimal128Type, T>::value,
                           Status>::type
   Visit(const T& type) {
     typename TypeTraits<T>::BuilderType builder(type_, pool_);
@@ -1105,7 +1069,7 @@ class ArrayReader {
   }
 
   template <typename T>
-  typename std::enable_if<std::is_base_of<DecimalType, T>::value, Status>::type Visit(
+  typename std::enable_if<std::is_base_of<Decimal128Type, T>::value, Status>::type Visit(
       const T& type) {
     typename TypeTraits<T>::BuilderType builder(type_, pool_);
 
@@ -1435,7 +1399,7 @@ Status ReadRecordBatch(const rj::Value& json_obj, const std::shared_ptr<Schema>&
     RETURN_NOT_OK(ReadArray(pool, json_columns[i], type, &columns[i]));
   }
 
-  *batch = std::make_shared<RecordBatch>(schema, num_rows, columns);
+  *batch = RecordBatch::Make(schema, num_rows, columns);
   return Status::OK();
 }
 
@@ -1502,7 +1466,7 @@ Status ReadArray(MemoryPool* pool, const rj::Value& json_array, const Schema& sc
   return ReadArray(pool, json_array, result->type(), array);
 }
 
-}  // namespace internal
 }  // namespace json
+}  // namespace internal
 }  // namespace ipc
 }  // namespace arrow

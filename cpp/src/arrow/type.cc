@@ -373,7 +373,7 @@ ACCEPT_VISITOR(FixedSizeBinaryType);
 ACCEPT_VISITOR(StringType);
 ACCEPT_VISITOR(ListType);
 ACCEPT_VISITOR(StructType);
-ACCEPT_VISITOR(DecimalType);
+ACCEPT_VISITOR(Decimal128Type);
 ACCEPT_VISITOR(UnionType);
 ACCEPT_VISITOR(Date32Type);
 ACCEPT_VISITOR(Date64Type);
@@ -471,47 +471,10 @@ std::shared_ptr<Field> field(const std::string& name,
 }
 
 std::shared_ptr<DataType> decimal(int32_t precision, int32_t scale) {
-  return std::make_shared<DecimalType>(precision, scale);
+  return std::make_shared<Decimal128Type>(precision, scale);
 }
 
-static const BufferDescr kValidityBuffer(BufferType::VALIDITY, 1);
-static const BufferDescr kOffsetBuffer(BufferType::OFFSET, 32);
-static const BufferDescr kTypeBuffer(BufferType::TYPE, 32);
-static const BufferDescr kBooleanBuffer(BufferType::DATA, 1);
-static const BufferDescr kValues64(BufferType::DATA, 64);
-static const BufferDescr kValues32(BufferType::DATA, 32);
-static const BufferDescr kValues16(BufferType::DATA, 16);
-static const BufferDescr kValues8(BufferType::DATA, 8);
-
-std::vector<BufferDescr> FixedWidthType::GetBufferLayout() const {
-  return {kValidityBuffer, BufferDescr(BufferType::DATA, bit_width())};
-}
-
-std::vector<BufferDescr> NullType::GetBufferLayout() const { return {}; }
-
-std::vector<BufferDescr> BinaryType::GetBufferLayout() const {
-  return {kValidityBuffer, kOffsetBuffer, kValues8};
-}
-
-std::vector<BufferDescr> FixedSizeBinaryType::GetBufferLayout() const {
-  return {kValidityBuffer, BufferDescr(BufferType::DATA, bit_width())};
-}
-
-std::vector<BufferDescr> ListType::GetBufferLayout() const {
-  return {kValidityBuffer, kOffsetBuffer};
-}
-
-std::vector<BufferDescr> StructType::GetBufferLayout() const { return {kValidityBuffer}; }
-
-std::vector<BufferDescr> UnionType::GetBufferLayout() const {
-  if (mode_ == UnionMode::SPARSE) {
-    return {kValidityBuffer, kTypeBuffer};
-  } else {
-    return {kValidityBuffer, kTypeBuffer, kOffsetBuffer};
-  }
-}
-
-std::string DecimalType::ToString() const {
+std::string Decimal128Type::ToString() const {
   std::stringstream s;
   s << "decimal(" << precision_ << ", " << scale_ << ")";
   return s.str();

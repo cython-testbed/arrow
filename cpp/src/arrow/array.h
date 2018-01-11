@@ -65,9 +65,9 @@ struct Decimal;
 /// could cast from int64 to float64 like so:
 ///
 /// Int64Array arr = GetMyData();
-/// auto new_data = arr->data()->ShallowCopy();
+/// auto new_data = arr.data()->ShallowCopy();
 /// new_data->type = arrow::float64();
-/// Float64Array double_arr(new_data);
+/// DoubleArray double_arr(new_data);
 ///
 /// This object is also useful in an analytics setting where memory may be
 /// reused. For example, if we had a group of operations all returning doubles,
@@ -104,6 +104,17 @@ struct ARROW_EXPORT ArrayData {
     this->buffers = std::move(buffers);
   }
 
+  static std::shared_ptr<ArrayData> Make(const std::shared_ptr<DataType>& type,
+                                         int64_t length,
+                                         std::vector<std::shared_ptr<Buffer>>&& buffers,
+                                         int64_t null_count = kUnknownNullCount,
+                                         int64_t offset = 0);
+
+  static std::shared_ptr<ArrayData> Make(const std::shared_ptr<DataType>& type,
+                                         int64_t length,
+                                         int64_t null_count = kUnknownNullCount,
+                                         int64_t offset = 0);
+
   // Move constructor
   ArrayData(ArrayData&& other) noexcept
       : type(std::move(other.type)),
@@ -132,9 +143,14 @@ struct ARROW_EXPORT ArrayData {
     return *this;
   }
 
-  std::shared_ptr<ArrayData> ShallowCopy() const {
-    return std::make_shared<ArrayData>(*this);
-  }
+  std::shared_ptr<ArrayData> Copy() const { return std::make_shared<ArrayData>(*this); }
+
+#ifndef ARROW_NO_DEPRECATED_API
+
+  // Deprecated since 0.8.0
+  std::shared_ptr<ArrayData> ShallowCopy() const { return Copy(); }
+
+#endif
 
   std::shared_ptr<DataType> type;
   int64_t length;
@@ -279,6 +295,8 @@ class ARROW_EXPORT Array {
   ARROW_DISALLOW_COPY_AND_ASSIGN(Array);
 };
 
+using ArrayVector = std::vector<std::shared_ptr<Array>>;
+
 static inline std::ostream& operator<<(std::ostream& os, const Array& x) {
   os << x.ToString();
   return os;
@@ -316,8 +334,14 @@ class ARROW_EXPORT PrimitiveArray : public FlatArray {
   /// Does not account for any slice offset
   std::shared_ptr<Buffer> values() const { return data_->buffers[1]; }
 
+#ifndef ARROW_NO_DEPRECATED_API
+
   /// \brief Return pointer to start of raw data
+  ///
+  /// \note Deprecated since 0.8.0
   const uint8_t* raw_values() const;
+
+#endif
 
  protected:
   PrimitiveArray() {}
@@ -549,6 +573,8 @@ class ARROW_EXPORT FixedSizeBinaryArray : public PrimitiveArray {
 
   int32_t byte_width() const { return byte_width_; }
 
+  const uint8_t* raw_values() const { return raw_values_ + data_->offset * byte_width_; }
+
  protected:
   inline void SetData(const std::shared_ptr<ArrayData>& data) {
     this->PrimitiveArray::SetData(data);
@@ -562,7 +588,7 @@ class ARROW_EXPORT FixedSizeBinaryArray : public PrimitiveArray {
 // Decimal128Array
 class ARROW_EXPORT Decimal128Array : public FixedSizeBinaryArray {
  public:
-  using TypeClass = DecimalType;
+  using TypeClass = Decimal128Type;
 
   using FixedSizeBinaryArray::FixedSizeBinaryArray;
 
