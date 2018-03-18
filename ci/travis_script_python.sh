@@ -86,7 +86,7 @@ fi
 export PYARROW_BUILD_TYPE=$ARROW_BUILD_TYPE
 
 pip install -r requirements.txt
-pip install --install-option="--no-cython-compile" https://github.com/cython/cython/archive/634a86f26c2da8fe37ee27d49c4d5be410376f59.zip
+pip install --install-option="--no-cython-compile" https://github.com/cython/cython/archive/cc5a93bd22f1fef2b663c020a57785319000dfdd.zip
 python setup.py build_ext --with-parquet --with-plasma --with-orc\
        install -q --single-version-externally-managed --record=record.text
 popd
