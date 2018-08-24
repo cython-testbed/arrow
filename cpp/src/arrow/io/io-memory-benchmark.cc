@@ -28,12 +28,10 @@ namespace arrow {
 static void BM_SerialMemcopy(benchmark::State& state) {  // NOLINT non-const reference
   constexpr int64_t kTotalSize = 100 * 1024 * 1024;      // 100MB
 
-  auto buffer1 = std::make_shared<PoolBuffer>(default_memory_pool());
-  ABORT_NOT_OK(buffer1->Resize(kTotalSize));
-
-  auto buffer2 = std::make_shared<PoolBuffer>(default_memory_pool());
-  ABORT_NOT_OK(buffer2->Resize(kTotalSize));
-  test::random_bytes(kTotalSize, 0, buffer2->mutable_data());
+  std::shared_ptr<Buffer> buffer1, buffer2;
+  ABORT_NOT_OK(AllocateBuffer(kTotalSize, &buffer1));
+  ABORT_NOT_OK(AllocateBuffer(kTotalSize, &buffer2));
+  random_bytes(kTotalSize, 0, buffer2->mutable_data());
 
   while (state.KeepRunning()) {
     io::FixedSizeBufferWriter writer(buffer1);
@@ -45,12 +43,11 @@ static void BM_SerialMemcopy(benchmark::State& state) {  // NOLINT non-const ref
 static void BM_ParallelMemcopy(benchmark::State& state) {  // NOLINT non-const reference
   constexpr int64_t kTotalSize = 100 * 1024 * 1024;        // 100MB
 
-  auto buffer1 = std::make_shared<PoolBuffer>(default_memory_pool());
-  ABORT_NOT_OK(buffer1->Resize(kTotalSize));
+  std::shared_ptr<Buffer> buffer1, buffer2;
+  ABORT_NOT_OK(AllocateBuffer(kTotalSize, &buffer1));
+  ABORT_NOT_OK(AllocateBuffer(kTotalSize, &buffer2));
 
-  auto buffer2 = std::make_shared<PoolBuffer>(default_memory_pool());
-  ABORT_NOT_OK(buffer2->Resize(kTotalSize));
-  test::random_bytes(kTotalSize, 0, buffer2->mutable_data());
+  random_bytes(kTotalSize, 0, buffer2->mutable_data());
 
   while (state.KeepRunning()) {
     io::FixedSizeBufferWriter writer(buffer1);
@@ -60,16 +57,8 @@ static void BM_ParallelMemcopy(benchmark::State& state) {  // NOLINT non-const r
   state.SetBytesProcessed(int64_t(state.iterations()) * kTotalSize);
 }
 
-BENCHMARK(BM_SerialMemcopy)
-    ->RangeMultiplier(4)
-    ->Range(1, 1 << 13)
-    ->MinTime(1.0)
-    ->UseRealTime();
+BENCHMARK(BM_SerialMemcopy)->MinTime(1.0)->Repetitions(2)->UseRealTime();
 
-BENCHMARK(BM_ParallelMemcopy)
-    ->RangeMultiplier(4)
-    ->Range(1, 1 << 13)
-    ->MinTime(1.0)
-    ->UseRealTime();
+BENCHMARK(BM_ParallelMemcopy)->MinTime(1.0)->Repetitions(2)->UseRealTime();
 
 }  // namespace arrow

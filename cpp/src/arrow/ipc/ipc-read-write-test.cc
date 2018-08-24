@@ -38,6 +38,7 @@
 #include "arrow/tensor.h"
 #include "arrow/test-util.h"
 #include "arrow/util/bit-util.h"
+#include "arrow/util/checked_cast.h"
 
 namespace arrow {
 namespace ipc {
@@ -116,10 +117,21 @@ TEST_F(TestSchemaMetadata, NestedFields) {
   CheckRoundtrip(schema);
 }
 
+TEST_F(TestSchemaMetadata, KeyValueMetadata) {
+  auto field_metadata = key_value_metadata({{"key", "value"}});
+  auto schema_metadata = key_value_metadata({{"foo", "bar"}, {"bizz", "buzz"}});
+
+  auto f0 = field("f0", std::make_shared<Int8Type>());
+  auto f1 = field("f1", std::make_shared<Int16Type>(), false, field_metadata);
+
+  Schema schema({f0, f1}, schema_metadata);
+  CheckRoundtrip(schema);
+}
+
 #define BATCH_CASES()                                                                   \
   ::testing::Values(&MakeIntRecordBatch, &MakeListRecordBatch, &MakeNonNullRecordBatch, \
                     &MakeZeroLengthRecordBatch, &MakeDeeplyNestedList,                  \
-                    &MakeStringTypesRecordBatch, &MakeStruct, &MakeUnion,               \
+                    &MakeStringTypesRecordBatchWithNulls, &MakeStruct, &MakeUnion,      \
                     &MakeDictionary, &MakeDates, &MakeTimestamps, &MakeTimes,           \
                     &MakeFWBinary, &MakeNull, &MakeDecimal, &MakeBooleanBatch);
 
@@ -339,7 +351,7 @@ TEST_F(TestWriteRecordBatch, SliceTruncatesBuffers) {
   auto union_type = union_({field("f0", a0->type())}, {0});
   std::vector<int32_t> type_ids(a0->length());
   std::shared_ptr<Buffer> ids_buffer;
-  ASSERT_OK(test::CopyBufferFromVector(type_ids, default_memory_pool(), &ids_buffer));
+  ASSERT_OK(CopyBufferFromVector(type_ids, default_memory_pool(), &ids_buffer));
   a1 =
       std::make_shared<UnionArray>(union_type, a0->length(), struct_children, ids_buffer);
   CheckArray(a1);
@@ -351,8 +363,7 @@ TEST_F(TestWriteRecordBatch, SliceTruncatesBuffers) {
     type_offsets.push_back(i);
   }
   std::shared_ptr<Buffer> offsets_buffer;
-  ASSERT_OK(
-      test::CopyBufferFromVector(type_offsets, default_memory_pool(), &offsets_buffer));
+  ASSERT_OK(CopyBufferFromVector(type_offsets, default_memory_pool(), &offsets_buffer));
   a1 = std::make_shared<UnionArray>(dense_union_type, a0->length(), struct_children,
                                     ids_buffer, offsets_buffer);
   CheckArray(a1);
@@ -486,8 +497,11 @@ TEST_F(RecursionLimits, StressLimit) {
   CheckDepth(100, &it_works);
   ASSERT_TRUE(it_works);
 
+// Mitigate Valgrind's slowness
+#if !defined(ARROW_VALGRIND)
   CheckDepth(500, &it_works);
   ASSERT_TRUE(it_works);
+#endif
 }
 #endif  // !defined(_WIN32) || defined(NDEBUG)
 
@@ -495,7 +509,7 @@ class TestFileFormat : public ::testing::TestWithParam<MakeRecordBatch*> {
  public:
   void SetUp() {
     pool_ = default_memory_pool();
-    buffer_ = std::make_shared<PoolBuffer>(pool_);
+    ASSERT_OK(AllocateResizableBuffer(pool_, 0, &buffer_));
     sink_.reset(new io::BufferOutputStream(buffer_));
   }
   void TearDown() {}
@@ -537,7 +551,7 @@ class TestFileFormat : public ::testing::TestWithParam<MakeRecordBatch*> {
   MemoryPool* pool_;
 
   std::unique_ptr<io::BufferOutputStream> sink_;
-  std::shared_ptr<PoolBuffer> buffer_;
+  std::shared_ptr<ResizableBuffer> buffer_;
 };
 
 TEST_P(TestFileFormat, RoundTrip) {
@@ -561,7 +575,7 @@ class TestStreamFormat : public ::testing::TestWithParam<MakeRecordBatch*> {
  public:
   void SetUp() {
     pool_ = default_memory_pool();
-    buffer_ = std::make_shared<PoolBuffer>(pool_);
+    ASSERT_OK(AllocateResizableBuffer(pool_, 0, &buffer_));
     sink_.reset(new io::BufferOutputStream(buffer_));
   }
   void TearDown() {}
@@ -599,7 +613,7 @@ class TestStreamFormat : public ::testing::TestWithParam<MakeRecordBatch*> {
   MemoryPool* pool_;
 
   std::unique_ptr<io::BufferOutputStream> sink_;
-  std::shared_ptr<PoolBuffer> buffer_;
+  std::shared_ptr<ResizableBuffer> buffer_;
 };
 
 TEST_P(TestStreamFormat, RoundTrip) {
@@ -620,6 +634,9 @@ INSTANTIATE_TEST_CASE_P(GenericIpcRoundTripTests, TestIpcRoundTrip, BATCH_CASES(
 INSTANTIATE_TEST_CASE_P(FileRoundTripTests, TestFileFormat, BATCH_CASES());
 INSTANTIATE_TEST_CASE_P(StreamRoundTripTests, TestStreamFormat, BATCH_CASES());
 
+// This test uses uninitialized memory
+
+#if !(defined(ARROW_VALGRIND) || defined(ADDRESS_SANITIZER))
 TEST_F(TestIpcRoundTrip, LargeRecordBatch) {
   const int64_t length = static_cast<int64_t>(std::numeric_limits<int32_t>::max()) + 1;
 
@@ -648,19 +665,20 @@ TEST_F(TestIpcRoundTrip, LargeRecordBatch) {
 
   ASSERT_EQ(length, result->num_rows());
 }
+#endif
 
 void CheckBatchDictionaries(const RecordBatch& batch) {
   // Check that dictionaries that should be the same are the same
   auto schema = batch.schema();
 
-  const auto& t0 = static_cast<const DictionaryType&>(*schema->field(0)->type());
-  const auto& t1 = static_cast<const DictionaryType&>(*schema->field(1)->type());
+  const auto& t0 = checked_cast<const DictionaryType&>(*schema->field(0)->type());
+  const auto& t1 = checked_cast<const DictionaryType&>(*schema->field(1)->type());
 
   ASSERT_EQ(t0.dictionary().get(), t1.dictionary().get());
 
   // Same dictionary used for list values
-  const auto& t3 = static_cast<const ListType&>(*schema->field(3)->type());
-  const auto& t3_value = static_cast<const DictionaryType&>(*t3.value_type());
+  const auto& t3 = checked_cast<const ListType&>(*schema->field(3)->type());
+  const auto& t3_value = checked_cast<const DictionaryType&>(*t3.value_type());
   ASSERT_EQ(t0.dictionary().get(), t3_value.dictionary().get());
 }
 
@@ -729,9 +747,9 @@ TEST_F(TestTensorRoundTrip, BasicRoundtrip) {
   int64_t size = 24;
 
   std::vector<int64_t> values;
-  test::randint(size, 0, 100, &values);
+  randint(size, 0, 100, &values);
 
-  auto data = test::GetBufferFromVector(values);
+  auto data = GetBufferFromVector(values);
 
   Tensor t0(int64(), data, shape, strides, dim_names);
   Tensor tzero(int64(), data, {}, {}, {});
@@ -750,9 +768,9 @@ TEST_F(TestTensorRoundTrip, NonContiguous) {
   ASSERT_OK(io::MemoryMapFixture::InitMemoryMap(kBufferSize, path, &mmap_));
 
   std::vector<int64_t> values;
-  test::randint(24, 0, 100, &values);
+  randint(24, 0, 100, &values);
 
-  auto data = test::GetBufferFromVector(values);
+  auto data = GetBufferFromVector(values);
   Tensor tensor(int64(), data, {4, 3}, {48, 16});
 
   CheckTensorRoundTrip(tensor);

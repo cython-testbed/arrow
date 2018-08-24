@@ -20,7 +20,8 @@ DOC_MODULE = arrow-glib
 DOC_MAIN_SGML_FILE = $(DOC_MODULE)-docs.xml
 
 DOC_SOURCE_DIR =				\
-	$(top_srcdir)/arrow-glib
+	$(top_srcdir)/arrow-glib		\
+	$(top_builddir)/arrow-glib
 
 SCAN_OPTIONS =						\
 	--deprecated-guards="GARROW_DISABLE_DEPRECATED"
@@ -30,9 +31,15 @@ MKDB_OPTIONS =					\
 	--source-suffixes="c,cpp,h"
 
 HFILE_GLOB =					\
-	$(top_srcdir)/arrow-glib/*.h
+	$(top_srcdir)/arrow-glib/*.h		\
+	$(top_builddir)/arrow-glib/*.h
 
 IGNORE_HFILES =
+
+if !HAVE_ARROW_ORC
+IGNORE_HFILES +=					\
+	$(top_srcdir)/arrow-glib/orc-file-reader.h
+endif
 
 CFILE_GLOB =					\
 	$(top_srcdir)/arrow-glib/*.cpp
@@ -59,7 +66,7 @@ GTKDOC_LIBS +=							\
 	$(top_builddir)/arrow-gpu-glib/libarrow-gpu-glib.la
 endif
 
-include $(srcdir)/gtk-doc.make
+include $(top_srcdir)/gtk-doc.make
 
 CLEANFILES +=					\
 	$(DOC_MODULE)-decl-list.txt		\

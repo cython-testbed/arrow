@@ -37,10 +37,13 @@
 #include "arrow/type.h"
 #include "arrow/type_traits.h"
 #include "arrow/util/bit-util.h"
+#include "arrow/util/checked_cast.h"
 #include "arrow/util/decimal.h"
+#include "arrow/util/lazy.h"
 #include "arrow/util/macros.h"
 #include "arrow/util/visibility.h"
 
+#include "orc/Exceptions.hh"
 #include "orc/OrcFile.hh"
 
 // alias to not interfere with nested orc namespace
@@ -360,7 +363,7 @@ class ORCFileReader::Impl {
     RETURN_NOT_OK(RecordBatchBuilder::Make(schema, pool_, nrows, &builder));
 
     // The top-level type must be a struct to read into an arrow table
-    const auto& struct_batch = static_cast<liborc::StructVectorBatch&>(*batch);
+    const auto& struct_batch = checked_cast<liborc::StructVectorBatch&>(*batch);
 
     while (rowreader->next(*batch)) {
       for (int i = 0; i < builder->num_fields(); i++) {
@@ -428,14 +431,14 @@ class ORCFileReader::Impl {
 
   Status AppendStructBatch(const liborc::Type* type, liborc::ColumnVectorBatch* cbatch,
                            int64_t offset, int64_t length, ArrayBuilder* abuilder) {
-    auto builder = static_cast<StructBuilder*>(abuilder);
-    auto batch = static_cast<liborc::StructVectorBatch*>(cbatch);
+    auto builder = checked_cast<StructBuilder*>(abuilder);
+    auto batch = checked_cast<liborc::StructVectorBatch*>(cbatch);
 
     const uint8_t* valid_bytes = nullptr;
     if (batch->hasNulls) {
       valid_bytes = reinterpret_cast<const uint8_t*>(batch->notNull.data()) + offset;
     }
-    RETURN_NOT_OK(builder->Append(length, valid_bytes));
+    RETURN_NOT_OK(builder->AppendValues(length, valid_bytes));
 
     for (int i = 0; i < builder->num_fields(); i++) {
       RETURN_NOT_OK(AppendBatch(type->getSubtype(i), batch->fields[i], offset, length,
@@ -446,8 +449,8 @@ class ORCFileReader::Impl {
 
   Status AppendListBatch(const liborc::Type* type, liborc::ColumnVectorBatch* cbatch,
                          int64_t offset, int64_t length, ArrayBuilder* abuilder) {
-    auto builder = static_cast<ListBuilder*>(abuilder);
-    auto batch = static_cast<liborc::ListVectorBatch*>(cbatch);
+    auto builder = checked_cast<ListBuilder*>(abuilder);
+    auto batch = checked_cast<liborc::ListVectorBatch*>(cbatch);
     liborc::ColumnVectorBatch* elements = batch->elements.get();
     const liborc::Type* elemtype = type->getSubtype(0);
 
@@ -468,9 +471,9 @@ class ORCFileReader::Impl {
 
   Status AppendMapBatch(const liborc::Type* type, liborc::ColumnVectorBatch* cbatch,
                         int64_t offset, int64_t length, ArrayBuilder* abuilder) {
-    auto list_builder = static_cast<ListBuilder*>(abuilder);
-    auto struct_builder = static_cast<StructBuilder*>(list_builder->value_builder());
-    auto batch = static_cast<liborc::MapVectorBatch*>(cbatch);
+    auto list_builder = checked_cast<ListBuilder*>(abuilder);
+    auto struct_builder = checked_cast<StructBuilder*>(list_builder->value_builder());
+    auto batch = checked_cast<liborc::MapVectorBatch*>(cbatch);
     liborc::ColumnVectorBatch* keys = batch->keys.get();
     liborc::ColumnVectorBatch* vals = batch->elements.get();
     const liborc::Type* keytype = type->getSubtype(0);
@@ -482,7 +485,7 @@ class ORCFileReader::Impl {
       int64_t start = batch->offsets[i];
       int64_t list_length = batch->offsets[i + 1] - start;
       if (list_length && (!has_nulls || batch->notNull[i])) {
-        RETURN_NOT_OK(struct_builder->Append(list_length, nullptr));
+        RETURN_NOT_OK(struct_builder->AppendValues(list_length, nullptr));
         RETURN_NOT_OK(AppendBatch(keytype, keys, start, list_length,
                                   struct_builder->field_builder(0)));
         RETURN_NOT_OK(AppendBatch(valtype, vals, start, list_length,
@@ -495,8 +498,8 @@ class ORCFileReader::Impl {
   template <class builder_type, class batch_type, class elem_type>
   Status AppendNumericBatch(liborc::ColumnVectorBatch* cbatch, int64_t offset,
                             int64_t length, ArrayBuilder* abuilder) {
-    auto builder = static_cast<builder_type*>(abuilder);
-    auto batch = static_cast<batch_type*>(cbatch);
+    auto builder = checked_cast<builder_type*>(abuilder);
+    auto batch = checked_cast<batch_type*>(cbatch);
 
     if (length == 0) {
       return Status::OK();
@@ -506,97 +509,90 @@ class ORCFileReader::Impl {
       valid_bytes = reinterpret_cast<const uint8_t*>(batch->notNull.data()) + offset;
     }
     const elem_type* source = batch->data.data() + offset;
-    RETURN_NOT_OK(builder->Append(source, length, valid_bytes));
+    RETURN_NOT_OK(builder->AppendValues(source, length, valid_bytes));
     return Status::OK();
   }
 
   template <class builder_type, class target_type, class batch_type, class source_type>
   Status AppendNumericBatchCast(liborc::ColumnVectorBatch* cbatch, int64_t offset,
                                 int64_t length, ArrayBuilder* abuilder) {
-    auto builder = static_cast<builder_type*>(abuilder);
-    auto batch = static_cast<batch_type*>(cbatch);
+    auto builder = checked_cast<builder_type*>(abuilder);
+    auto batch = checked_cast<batch_type*>(cbatch);
 
     if (length == 0) {
       return Status::OK();
     }
-    int64_t start = builder->length();
 
     const uint8_t* valid_bytes = nullptr;
     if (batch->hasNulls) {
       valid_bytes = reinterpret_cast<const uint8_t*>(batch->notNull.data()) + offset;
     }
-    RETURN_NOT_OK(builder->AppendNulls(valid_bytes, length));
-
     const source_type* source = batch->data.data() + offset;
-    target_type* target = reinterpret_cast<target_type*>(builder->data()->mutable_data());
+    auto cast_iter = internal::MakeLazyRange(
+        [&source](int64_t index) { return static_cast<target_type>(source[index]); },
+        length);
 
-    std::copy(source, source + length, target + start);
+    RETURN_NOT_OK(builder->AppendValues(cast_iter.begin(), cast_iter.end(), valid_bytes));
 
     return Status::OK();
   }
 
   Status AppendBoolBatch(liborc::ColumnVectorBatch* cbatch, int64_t offset,
                          int64_t length, ArrayBuilder* abuilder) {
-    auto builder = static_cast<BooleanBuilder*>(abuilder);
-    auto batch = static_cast<liborc::LongVectorBatch*>(cbatch);
+    auto builder = checked_cast<BooleanBuilder*>(abuilder);
+    auto batch = checked_cast<liborc::LongVectorBatch*>(cbatch);
 
     if (length == 0) {
       return Status::OK();
     }
-    int64_t start = builder->length();
 
     const uint8_t* valid_bytes = nullptr;
     if (batch->hasNulls) {
       valid_bytes = reinterpret_cast<const uint8_t*>(batch->notNull.data()) + offset;
     }
-    RETURN_NOT_OK(builder->AppendNulls(valid_bytes, length));
-
     const int64_t* source = batch->data.data() + offset;
-    uint8_t* target = reinterpret_cast<uint8_t*>(builder->data()->mutable_data());
 
-    for (int64_t i = 0; i < length; i++) {
-      if (source[i]) {
-        BitUtil::SetBit(target, start + i);
-      } else {
-        BitUtil::ClearBit(target, start + i);
-      }
-    }
+    auto cast_iter = internal::MakeLazyRange(
+        [&source](int64_t index) { return static_cast<bool>(source[index]); }, length);
+
+    RETURN_NOT_OK(builder->AppendValues(cast_iter.begin(), cast_iter.end(), valid_bytes));
+
     return Status::OK();
   }
 
   Status AppendTimestampBatch(liborc::ColumnVectorBatch* cbatch, int64_t offset,
                               int64_t length, ArrayBuilder* abuilder) {
-    auto builder = static_cast<TimestampBuilder*>(abuilder);
-    auto batch = static_cast<liborc::TimestampVectorBatch*>(cbatch);
+    auto builder = checked_cast<TimestampBuilder*>(abuilder);
+    auto batch = checked_cast<liborc::TimestampVectorBatch*>(cbatch);
 
     if (length == 0) {
       return Status::OK();
     }
-    int64_t start = builder->length();
 
     const uint8_t* valid_bytes = nullptr;
     if (batch->hasNulls) {
       valid_bytes = reinterpret_cast<const uint8_t*>(batch->notNull.data()) + offset;
     }
-    RETURN_NOT_OK(builder->AppendNulls(valid_bytes, length));
 
     const int64_t* seconds = batch->data.data() + offset;
     const int64_t* nanos = batch->nanoseconds.data() + offset;
-    int64_t* target = reinterpret_cast<int64_t*>(builder->data()->mutable_data());
 
-    for (int64_t i = 0; i < length; i++) {
-      // TODO: boundscheck this, as ORC supports higher resolution timestamps
-      // than arrow for nanosecond resolution
-      target[start + i] = seconds[i] * kOneSecondNanos + nanos[i];
-    }
+    auto transform_timestamp = [seconds, nanos](int64_t index) {
+      return seconds[index] * kOneSecondNanos + nanos[index];
+    };
+
+    auto transform_range = internal::MakeLazyRange(transform_timestamp, length);
+
+    RETURN_NOT_OK(builder->AppendValues(transform_range.begin(), transform_range.end(),
+                                        valid_bytes));
     return Status::OK();
   }
 
   template <class builder_type>
   Status AppendBinaryBatch(liborc::ColumnVectorBatch* cbatch, int64_t offset,
                            int64_t length, ArrayBuilder* abuilder) {
-    auto builder = static_cast<builder_type*>(abuilder);
-    auto batch = static_cast<liborc::StringVectorBatch*>(cbatch);
+    auto builder = checked_cast<builder_type*>(abuilder);
+    auto batch = checked_cast<liborc::StringVectorBatch*>(cbatch);
 
     const bool has_nulls = batch->hasNulls;
     for (int64_t i = offset; i < length + offset; i++) {
@@ -612,8 +608,8 @@ class ORCFileReader::Impl {
 
   Status AppendFixedBinaryBatch(liborc::ColumnVectorBatch* cbatch, int64_t offset,
                                 int64_t length, ArrayBuilder* abuilder) {
-    auto builder = static_cast<FixedSizeBinaryBuilder*>(abuilder);
-    auto batch = static_cast<liborc::StringVectorBatch*>(cbatch);
+    auto builder = checked_cast<FixedSizeBinaryBuilder*>(abuilder);
+    auto batch = checked_cast<liborc::StringVectorBatch*>(cbatch);
 
     const bool has_nulls = batch->hasNulls;
     for (int64_t i = offset; i < length + offset; i++) {
@@ -628,11 +624,11 @@ class ORCFileReader::Impl {
 
   Status AppendDecimalBatch(const liborc::Type* type, liborc::ColumnVectorBatch* cbatch,
                             int64_t offset, int64_t length, ArrayBuilder* abuilder) {
-    auto builder = static_cast<Decimal128Builder*>(abuilder);
+    auto builder = checked_cast<Decimal128Builder*>(abuilder);
 
     const bool has_nulls = cbatch->hasNulls;
     if (type->getPrecision() == 0 || type->getPrecision() > 18) {
-      auto batch = static_cast<liborc::Decimal128VectorBatch*>(cbatch);
+      auto batch = checked_cast<liborc::Decimal128VectorBatch*>(cbatch);
       for (int64_t i = offset; i < length + offset; i++) {
         if (!has_nulls || batch->notNull[i]) {
           RETURN_NOT_OK(builder->Append(
@@ -642,7 +638,7 @@ class ORCFileReader::Impl {
         }
       }
     } else {
-      auto batch = static_cast<liborc::Decimal64VectorBatch*>(cbatch);
+      auto batch = checked_cast<liborc::Decimal64VectorBatch*>(cbatch);
       for (int64_t i = offset; i < length + offset; i++) {
         if (!has_nulls || batch->notNull[i]) {
           RETURN_NOT_OK(builder->Append(Decimal128(batch->values[i])));

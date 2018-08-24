@@ -19,7 +19,9 @@ AC_PREREQ(2.65)
 
 m4_define([arrow_glib_version],
            m4_esyscmd(grep "^  <version>" "$(dirname $0)/../java/pom.xml" | \
-                        sed -e 's/\(^  <version>\|<\/version>$\)//g' | \
+                        sed -E \
+                            -e 's/(^  <version>)//g' \
+                            -e 's/(<\/version>$)//g' | \
                         tr -d '\n'))
 AC_INIT([arrow-glib],
         arrow_glib_version,
@@ -33,6 +35,27 @@ AC_CONFIG_HEADERS([config.h])
 
 AM_INIT_AUTOMAKE([1.13 foreign])
 AM_SILENT_RULES([yes])
+
+GARROW_VERSION_MAJOR=$(echo "arrow_glib_version" | \
+                         sed -E -e 's/^([[0-9]]+)\..+$/\1/' | \
+                         tr -d '\n')
+GARROW_VERSION_MINOR=$(echo "arrow_glib_version" | \
+                         sed -E -e 's/^[[0-9]]+\.([[0-9]]+)\..+$/\1/' | \
+                         tr -d '\n')
+GARROW_VERSION_MICRO=$(echo "arrow_glib_version" | \
+                         sed -E -e 's/^[[0-9]]+\.[[0-9]]+\.([[0-9]]+).*$/\1/' | \
+                         tr -d '\n')
+if echo "arrow_glib_version" | grep -- "-" > /dev/null; then
+  GARROW_VERSION_TAG=$(echo "arrow_glib_version" | \
+                         sed -E -e 's/^[[0-9]]+\.[[0-9]]+\.[[0-9]]+-(.+)$/\1/' | \
+                         tr -d '\n')
+else
+  GARROW_VERSION_TAG=
+fi
+AC_SUBST(GARROW_VERSION_MAJOR)
+AC_SUBST(GARROW_VERSION_MINOR)
+AC_SUBST(GARROW_VERSION_MICRO)
+AC_SUBST(GARROW_VERSION_TAG)
 
 AC_CANONICAL_HOST
 AC_MSG_CHECKING([for macOS])
@@ -92,6 +115,12 @@ if test "x$GARROW_ARROW_CPP_BUILD_DIR" = "x"; then
   USE_ARROW_BUILD_DIR=no
 
   PKG_CHECK_MODULES([ARROW], [arrow arrow-compute])
+  _PKG_CONFIG(ARROW_LIB_DIR, [variable=libdir], [arrow])
+  ARROW_LIB_DIR="$pkg_cv_ARROW_LIB_DIR"
+  PKG_CHECK_MODULES([ARROW_ORC],
+                    [arrow-orc],
+                    [HAVE_ARROW_ORC=yes],
+                    [HAVE_ARROW_ORC=no])
   PKG_CHECK_MODULES([ARROW_GPU],
                     [arrow-gpu],
                     [HAVE_ARROW_GPU=yes],
@@ -112,6 +141,12 @@ else
   AC_SUBST(ARROW_CFLAGS)
   AC_SUBST(ARROW_LIBS)
 
+  if test -f "${GARROW_ARROW_CPP_BUILD_DIR}/src/arrow/adapters/orc/arrow-orc.pc"; then
+    HAVE_ARROW_ORC=yes
+  else
+    HAVE_ARROW_ORC=no
+  fi
+
   ARROW_GPU_CFLAGS=""
   if test -f "${GARROW_ARROW_CPP_BUILD_DIR}/src/arrow/gpu/arrow-gpu.pc"; then
     HAVE_ARROW_GPU=yes
@@ -127,6 +162,11 @@ fi
 AM_CONDITIONAL([USE_ARROW_BUILD_DIR],
                [test "$USE_ARROW_BUILD_DIR" = "yes"])
 
+AM_CONDITIONAL([HAVE_ARROW_ORC], [test "$HAVE_ARROW_ORC" = "yes"])
+if test "$HAVE_ARROW_ORC" = "yes"; then
+  AC_DEFINE(HAVE_ARROW_ORC, [1], [Define to 1 if Apache Arrow supports ORC.])
+fi
+
 AM_CONDITIONAL([HAVE_ARROW_GPU], [test "$HAVE_ARROW_GPU" = "yes"])
 if test "$HAVE_ARROW_GPU" = "yes"; then
   AC_DEFINE(HAVE_ARROW_GPU, [1], [Define to 1 if Apache Arrow supports GPU.])
@@ -139,6 +179,8 @@ AC_CONFIG_FILES([
   Makefile
   arrow-glib/Makefile
   arrow-glib/arrow-glib.pc
+  arrow-glib/arrow-orc-glib.pc
+  arrow-glib/version.h
   arrow-gpu-glib/Makefile
   arrow-gpu-glib/arrow-gpu-glib.pc
   doc/Makefile

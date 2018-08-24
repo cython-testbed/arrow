@@ -36,6 +36,7 @@
 
 #include "arrow/status.h"
 #include "arrow/util/logging.h"
+#include "arrow/util/macros.h"
 #include "plasma/common.h"
 #include "plasma/common_generated.h"
 
@@ -65,12 +66,12 @@ namespace plasma {
   } while (0);
 
 /// Allocation granularity used in plasma for object allocation.
-#define BLOCK_SIZE 64
+constexpr int64_t kBlockSize = 64;
 
 struct Client;
 
 /// Mapping from object IDs to type and status of the request.
-typedef std::unordered_map<ObjectID, ObjectRequest, UniqueIDHasher> ObjectRequestMap;
+typedef std::unordered_map<ObjectID, ObjectRequest> ObjectRequestMap;
 
 // TODO(pcm): Replace this by the flatbuffers message PlasmaObjectSpec.
 struct PlasmaObject {
@@ -94,14 +95,14 @@ struct PlasmaObject {
   int device_num;
 };
 
-enum object_state {
+enum class ObjectState : int {
   /// Object was created but not sealed in the local Plasma Store.
   PLASMA_CREATED = 1,
   /// Object is sealed and stored in the local Plasma Store.
   PLASMA_SEALED
 };
 
-enum object_status {
+enum class ObjectStatus : int {
   /// The object was not found.
   OBJECT_NOT_FOUND = 0,
   /// The object was found.
@@ -111,10 +112,10 @@ enum object_status {
 /// This type is used by the Plasma store. It is here because it is exposed to
 /// the eviction policy.
 struct ObjectTableEntry {
-  /// Object id of this object.
-  ObjectID object_id;
-  /// Object info like size, creation time and owner.
-  ObjectInfoT info;
+  ObjectTableEntry();
+
+  ~ObjectTableEntry();
+
   /// Memory mapped file containing the object.
   int fd;
   /// Device number.
@@ -125,14 +126,19 @@ struct ObjectTableEntry {
   ptrdiff_t offset;
   /// Pointer to the object data. Needed to free the object.
   uint8_t* pointer;
+  /// Size of the object in bytes.
+  int64_t data_size;
+  /// Size of the object metadata in bytes.
+  int64_t metadata_size;
 #ifdef PLASMA_GPU
   /// IPC GPU handle to share with clients.
   std::shared_ptr<CudaIpcMemHandle> ipc_handle;
 #endif
-  /// Set of clients currently using this object.
-  std::unordered_set<Client*> clients;
+  /// Number of clients currently using this object.
+  int ref_count;
+
   /// The state of the object, e.g., whether it is open or sealed.
-  object_state state;
+  ObjectState state;
   /// The digest of the object. Used to see if two objects are the same.
   unsigned char digest[kDigestSize];
 };
@@ -140,7 +146,7 @@ struct ObjectTableEntry {
 /// The plasma store information that is exposed to the eviction policy.
 struct PlasmaStoreInfo {
   /// Objects that are in the Plasma store.
-  std::unordered_map<ObjectID, std::unique_ptr<ObjectTableEntry>, UniqueIDHasher> objects;
+  std::unordered_map<ObjectID, std::unique_ptr<ObjectTableEntry>> objects;
   /// The amount of memory (in bytes) that we allow to be allocated in the
   /// store.
   int64_t memory_capacity;
@@ -160,8 +166,8 @@ struct PlasmaStoreInfo {
 /// @param object_id The object_id of the entry we are looking for.
 /// @return The entry associated with the object_id or NULL if the object_id
 ///         is not present.
-ObjectTableEntry* get_object_table_entry(PlasmaStoreInfo* store_info,
-                                         const ObjectID& object_id);
+ObjectTableEntry* GetObjectTableEntry(PlasmaStoreInfo* store_info,
+                                      const ObjectID& object_id);
 
 /// Print a warning if the status is less than zero. This should be used to check
 /// the success of messages sent to plasma clients. We print a warning instead of
@@ -177,9 +183,9 @@ ObjectTableEntry* get_object_table_entry(PlasmaStoreInfo* store_info,
 /// @param client_sock The client socket. This is just used to print some extra
 ///        information.
 /// @return The errno set.
-int warn_if_sigpipe(int status, int client_sock);
+int WarnIfSigpipe(int status, int client_sock);
 
-uint8_t* create_object_info_buffer(ObjectInfoT* object_info);
+std::unique_ptr<uint8_t[]> CreateObjectInfoBuffer(flatbuf::ObjectInfoT* object_info);
 
 }  // namespace plasma
 

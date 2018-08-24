@@ -15,7 +15,9 @@
 # specific language governing permissions and limitations
 # under the License.
 
+import collections
 import datetime
+import pickle
 import pytest
 import struct
 import sys
@@ -23,6 +25,10 @@ import sys
 import numpy as np
 import pandas as pd
 import pandas.util.testing as tm
+try:
+    import pickle5
+except ImportError:
+    pickle5 = None
 
 import pyarrow as pa
 from pyarrow.pandas_compat import get_logical_type
@@ -33,14 +39,16 @@ def test_total_bytes_allocated():
     assert pa.total_allocated_bytes() == 0
 
 
-def test_repr_on_pre_init_array():
-    arr = pa.Array()
-    assert len(repr(arr)) > 0
-
-
-def test_getitem_NA():
+def test_getitem_NULL():
     arr = pa.array([1, None, 2])
-    assert arr[1] is pa.NA
+    assert arr[1] is pa.NULL
+
+
+def test_constructor_raises():
+    # This could happen by wrong capitalization.
+    # ARROW-2638: prevent calling extension class constructors directly
+    with pytest.raises(TypeError):
+        pa.Array([1, 2])
 
 
 def test_list_format():
@@ -48,23 +56,27 @@ def test_list_format():
     result = fmt.array_format(arr)
     expected = """\
 [
-  [1],
-  NA,
-  [2,
-   3,
-   NA]
+  [
+    1
+  ],
+  null,
+  [
+    2,
+    3,
+    null
+  ]
 ]"""
     assert result == expected
 
 
 def test_string_format():
-    arr = pa.array(['', None, 'foo'])
+    arr = pa.array([u'', None, u'foo'])
     result = fmt.array_format(arr)
     expected = """\
 [
-  '',
-  NA,
-  'foo'
+  "",
+  null,
+  "foo"
 ]"""
     assert result == expected
 
@@ -81,6 +93,40 @@ def test_long_array_format():
   99
 ]"""
     assert result == expected
+
+
+def test_to_numpy_zero_copy():
+    arr = pa.array(range(10))
+    old_refcount = sys.getrefcount(arr)
+
+    np_arr = arr.to_numpy()
+    np_arr[0] = 1
+    assert arr[0] == 1
+
+    assert sys.getrefcount(arr) == old_refcount
+
+    arr = None
+    import gc
+    gc.collect()
+
+    # Ensure base is still valid
+    assert np_arr.base is not None
+    expected = np.arange(10)
+    expected[0] = 1
+    np.testing.assert_array_equal(np_arr, expected)
+
+
+def test_to_numpy_unsupported_types():
+    # ARROW-2871: Some primitive types are not yet supported in to_numpy
+    bool_arr = pa.array([True, False, True])
+
+    with pytest.raises(NotImplementedError):
+        bool_arr.to_numpy()
+
+    null_arr = pa.array([None, None, None])
+
+    with pytest.raises(NotImplementedError):
+        null_arr.to_numpy()
 
 
 def test_to_pandas_zero_copy():
@@ -108,6 +154,49 @@ def test_to_pandas_zero_copy():
         base_refcount = sys.getrefcount(np_arr.base)
         assert base_refcount == 2
         np_arr.sum()
+
+
+def test_asarray():
+    arr = pa.array(range(4))
+
+    # The iterator interface gives back an array of Int64Value's
+    np_arr = np.asarray([_ for _ in arr])
+    assert np_arr.tolist() == [0, 1, 2, 3]
+    assert np_arr.dtype == np.dtype('O')
+    assert type(np_arr[0]) == pa.lib.Int64Value
+
+    # Calling with the arrow array gives back an array with 'int64' dtype
+    np_arr = np.asarray(arr)
+    assert np_arr.tolist() == [0, 1, 2, 3]
+    assert np_arr.dtype == np.dtype('int64')
+
+    # An optional type can be specified when calling np.asarray
+    np_arr = np.asarray(arr, dtype='str')
+    assert np_arr.tolist() == ['0', '1', '2', '3']
+
+    # If PyArrow array has null values, numpy type will be changed as needed
+    # to support nulls.
+    arr = pa.array([0, 1, 2, None])
+    assert arr.type == pa.int64()
+    np_arr = np.asarray(arr)
+    elements = np_arr.tolist()
+    assert elements[:3] == [0., 1., 2.]
+    assert np.isnan(elements[3])
+    assert np_arr.dtype == np.dtype('float64')
+
+
+def test_array_getitem():
+    arr = pa.array(range(10, 15))
+    lst = arr.to_pylist()
+
+    for idx in range(-len(arr), len(arr)):
+        assert arr[idx].as_py() == lst[idx]
+    for idx in range(-2 * len(arr), -len(arr)):
+        with pytest.raises(IndexError):
+            arr[idx]
+    for idx in range(len(arr), 2 * len(arr)):
+        with pytest.raises(IndexError):
+            arr[idx]
 
 
 def test_array_slice():
@@ -145,6 +234,15 @@ def test_array_slice():
             assert arr[start:stop].to_pylist() == arr.to_pylist()[start:stop]
 
 
+def test_array_iter():
+    arr = pa.array(range(10))
+
+    for i, j in zip(range(10), arr):
+        assert i == j
+
+    assert isinstance(arr, collections.Iterable)
+
+
 def test_struct_array_slice():
     # ARROW-2311: slicing nested arrays needs special care
     ty = pa.struct([pa.field('a', pa.int8()),
@@ -178,6 +276,29 @@ def test_array_eq_raises():
         arr1 == arr2
 
 
+def test_array_from_buffers():
+    values_buf = pa.py_buffer(np.int16([4, 5, 6, 7]))
+    nulls_buf = pa.py_buffer(np.uint8([0b00001101]))
+    arr = pa.Array.from_buffers(pa.int16(), 4, [nulls_buf, values_buf])
+    assert arr.type == pa.int16()
+    assert arr.to_pylist() == [4, None, 6, 7]
+
+    arr = pa.Array.from_buffers(pa.int16(), 4, [None, values_buf])
+    assert arr.type == pa.int16()
+    assert arr.to_pylist() == [4, 5, 6, 7]
+
+    arr = pa.Array.from_buffers(pa.int16(), 3, [nulls_buf, values_buf],
+                                offset=1)
+    assert arr.type == pa.int16()
+    assert arr.to_pylist() == [None, 6, 7]
+
+    with pytest.raises(TypeError):
+        pa.Array.from_buffers(pa.int16(), 3, [u'', u''], offset=1)
+
+    with pytest.raises(NotImplementedError):
+        pa.Array.from_buffers(pa.list_(pa.int16()), 4, [None, values_buf])
+
+
 def test_dictionary_from_numpy():
     indices = np.repeat([0, 1, 2], 2)
     dictionary = np.array(['foo', 'bar', 'baz'], dtype=object)
@@ -186,11 +307,16 @@ def test_dictionary_from_numpy():
     d1 = pa.DictionaryArray.from_arrays(indices, dictionary)
     d2 = pa.DictionaryArray.from_arrays(indices, dictionary, mask=mask)
 
+    assert d1.indices.to_pylist() == indices.tolist()
+    assert d1.indices.to_pylist() == indices.tolist()
+    assert d1.dictionary.to_pylist() == dictionary.tolist()
+    assert d2.dictionary.to_pylist() == dictionary.tolist()
+
     for i in range(len(indices)):
         assert d1[i].as_py() == dictionary[indices[i]]
 
         if mask[i]:
-            assert d2[i] is pa.NA
+            assert d2[i] is pa.NULL
         else:
             assert d2[i].as_py() == dictionary[indices[i]]
 
@@ -203,6 +329,9 @@ def test_dictionary_from_boxed_arrays():
     darr = pa.array(dictionary)
 
     d1 = pa.DictionaryArray.from_arrays(iarr, darr)
+
+    assert d1.indices.to_pylist() == indices.tolist()
+    assert d1.dictionary.to_pylist() == dictionary.tolist()
 
     for i in range(len(indices)):
         assert d1[i].as_py() == dictionary[indices[i]]
@@ -297,6 +426,25 @@ def test_union_from_sparse():
     result = pa.UnionArray.from_sparse(types, [binary, int64])
 
     assert result.to_pylist() == [b'a', 1, b'b', b'c', 2, 3, b'd']
+
+
+def test_union_array_slice():
+    # ARROW-2314
+    arr = pa.UnionArray.from_sparse(pa.array([0, 0, 1, 1], type=pa.int8()),
+                                    [pa.array(["a", "b", "c", "d"]),
+                                     pa.array([1, 2, 3, 4])])
+    assert arr[1:].to_pylist() == ["b", 3, 4]
+
+    binary = pa.array([b'a', b'b', b'c', b'd'], type='binary')
+    int64 = pa.array([1, 2, 3], type='int64')
+    types = pa.array([0, 1, 0, 0, 1, 1, 0], type='int8')
+    value_offsets = pa.array([0, 0, 2, 1, 1, 2, 3], type='int32')
+
+    arr = pa.UnionArray.from_dense(types, value_offsets, [binary, int64])
+    lst = arr.to_pylist()
+    for i in range(len(arr)):
+        for j in range(i, len(arr)):
+            assert arr[i:j].to_pylist() == lst[i:j]
 
 
 def test_string_from_buffers():
@@ -447,6 +595,10 @@ def test_unique_simple():
     for arr, expected in cases:
         result = arr.unique()
         assert result.equals(expected)
+        result = pa.column("column", arr).unique()
+        assert result.equals(expected)
+        result = pa.chunked_array([arr]).unique()
+        assert result.equals(expected)
 
 
 def test_dictionary_encode_simple():
@@ -463,6 +615,10 @@ def test_dictionary_encode_simple():
     for arr, expected in cases:
         result = arr.dictionary_encode()
         assert result.equals(expected)
+        result = pa.column("column", arr).dictionary_encode()
+        assert result.data.chunk(0).equals(expected)
+        result = pa.chunked_array([arr]).dictionary_encode()
+        assert result.chunk(0).equals(expected)
 
 
 def test_cast_time32_to_int():
@@ -518,10 +674,77 @@ def test_cast_date64_to_int():
     assert result.equals(expected)
 
 
-def test_simple_type_construction():
-    result = pa.lib.TimestampType()
-    with pytest.raises(TypeError):
-        str(result)
+pickle_test_parametrize = pytest.mark.parametrize(
+    ('data', 'typ'),
+    [
+        ([True, False, True, True], pa.bool_()),
+        ([1, 2, 4, 6], pa.int64()),
+        ([1.0, 2.5, None], pa.float64()),
+        (['a', None, 'b'], pa.string()),
+        ([], None),
+        ([[1, 2], [3]], pa.list_(pa.int64())),
+        ([['a'], None, ['b', 'c']], pa.list_(pa.string())),
+        ([(1, 'a'), (2, 'c'), None],
+            pa.struct([pa.field('a', pa.int64()), pa.field('b', pa.string())]))
+    ]
+)
+
+
+@pickle_test_parametrize
+def test_array_pickle(data, typ):
+    # Allocate here so that we don't have any Arrow data allocated.
+    # This is needed to ensure that allocator tests can be reliable.
+    array = pa.array(data, type=typ)
+    for proto in range(0, pickle.HIGHEST_PROTOCOL + 1):
+        result = pickle.loads(pickle.dumps(array, proto))
+        assert array.equals(result)
+
+
+@pickle_test_parametrize
+def test_array_pickle5(data, typ):
+    # Test zero-copy pickling with protocol 5 (PEP 574)
+    picklemod = pickle5 or pickle
+    if pickle5 is None and picklemod.HIGHEST_PROTOCOL < 5:
+        pytest.skip("need pickle5 package or Python 3.8+")
+
+    array = pa.array(data, type=typ)
+    addresses = [buf.address if buf is not None else 0
+                 for buf in array.buffers()]
+
+    for proto in range(5, pickle.HIGHEST_PROTOCOL + 1):
+        buffers = []
+        pickled = picklemod.dumps(array, proto, buffer_callback=buffers.append)
+        result = picklemod.loads(pickled, buffers=buffers)
+        assert array.equals(result)
+
+        result_addresses = [buf.address if buf is not None else 0
+                            for buf in result.buffers()]
+        assert result_addresses == addresses
+
+
+@pytest.mark.parametrize(
+    'narr',
+    [
+        np.arange(10, dtype=np.int64),
+        np.arange(10, dtype=np.int32),
+        np.arange(10, dtype=np.int16),
+        np.arange(10, dtype=np.int8),
+        np.arange(10, dtype=np.uint64),
+        np.arange(10, dtype=np.uint32),
+        np.arange(10, dtype=np.uint16),
+        np.arange(10, dtype=np.uint8),
+        np.arange(10, dtype=np.float64),
+        np.arange(10, dtype=np.float32),
+        np.arange(10, dtype=np.float16),
+    ]
+)
+def test_to_numpy_roundtrip(narr):
+    arr = pa.array(narr)
+    assert narr.dtype == arr.to_numpy().dtype
+    np.testing.assert_array_equal(narr, arr.to_numpy())
+    np.testing.assert_array_equal(narr[:6], arr[:6].to_numpy())
+    np.testing.assert_array_equal(narr[2:], arr[2:].to_numpy())
+    np.testing.assert_array_equal(narr[2:6], arr[2:6].to_numpy())
 
 
 @pytest.mark.parametrize(
@@ -736,11 +959,70 @@ def test_buffers_nested():
 
 
 def test_invalid_tensor_constructor_repr():
-    t = pa.Tensor([1])
-    assert repr(t) == '<invalid pyarrow.Tensor>'
-
-
-def test_invalid_tensor_operation():
-    t = pa.Tensor()
+    # ARROW-2638: prevent calling extension class constructors directly
     with pytest.raises(TypeError):
-        t.to_numpy()
+        repr(pa.Tensor([1]))
+
+
+def test_invalid_tensor_construction():
+    with pytest.raises(TypeError):
+        pa.Tensor()
+
+
+def test_struct_array_flatten():
+    ty = pa.struct([pa.field('x', pa.int16()),
+                    pa.field('y', pa.float32())])
+    a = pa.array([(1, 2.5), (3, 4.5), (5, 6.5)], type=ty)
+    xs, ys = a.flatten()
+    assert xs.type == pa.int16()
+    assert ys.type == pa.float32()
+    assert xs.to_pylist() == [1, 3, 5]
+    assert ys.to_pylist() == [2.5, 4.5, 6.5]
+    xs, ys = a[1:].flatten()
+    assert xs.to_pylist() == [3, 5]
+    assert ys.to_pylist() == [4.5, 6.5]
+
+    a = pa.array([(1, 2.5), None, (3, 4.5)], type=ty)
+    xs, ys = a.flatten()
+    assert xs.to_pylist() == [1, None, 3]
+    assert ys.to_pylist() == [2.5, None, 4.5]
+    xs, ys = a[1:].flatten()
+    assert xs.to_pylist() == [None, 3]
+    assert ys.to_pylist() == [None, 4.5]
+
+    a = pa.array([(1, None), (2, 3.5), (None, 4.5)], type=ty)
+    xs, ys = a.flatten()
+    assert xs.to_pylist() == [1, 2, None]
+    assert ys.to_pylist() == [None, 3.5, 4.5]
+    xs, ys = a[1:].flatten()
+    assert xs.to_pylist() == [2, None]
+    assert ys.to_pylist() == [3.5, 4.5]
+
+    a = pa.array([(1, None), None, (None, 2.5)], type=ty)
+    xs, ys = a.flatten()
+    assert xs.to_pylist() == [1, None, None]
+    assert ys.to_pylist() == [None, None, 2.5]
+    xs, ys = a[1:].flatten()
+    assert xs.to_pylist() == [None, None]
+    assert ys.to_pylist() == [None, 2.5]
+
+
+def test_nested_dictionary_array():
+    dict_arr = pa.DictionaryArray.from_arrays([0, 1, 0], ['a', 'b'])
+    list_arr = pa.ListArray.from_arrays([0, 2, 3], dict_arr)
+    assert list_arr.to_pylist() == [['a', 'b'], ['a']]
+
+    dict_arr = pa.DictionaryArray.from_arrays([0, 1, 0], ['a', 'b'])
+    dict_arr2 = pa.DictionaryArray.from_arrays([0, 1, 2, 1, 0], dict_arr)
+    assert dict_arr2.to_pylist() == ['a', 'b', 'a', 'b', 'a']
+
+
+@pytest.mark.parametrize('unit', ['ns', 'us', 'ms', 's'])
+def test_timestamp_units_from_list(unit):
+    x = np.datetime64('2017-01-01 01:01:01.111111111', unit)
+    a1 = pa.array([x])
+    a2 = pa.array([x], type=pa.timestamp(unit))
+
+    assert a1.type == a2.type
+    assert a1.type.unit == unit
+    assert a1[0] == a2[0]

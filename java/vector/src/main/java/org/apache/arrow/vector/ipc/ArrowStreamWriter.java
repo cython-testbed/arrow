@@ -20,36 +20,53 @@ package org.apache.arrow.vector.ipc;
 
 import org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.arrow.vector.dictionary.DictionaryProvider;
-import org.apache.arrow.vector.ipc.message.ArrowBlock;
-import org.apache.arrow.vector.ipc.ArrowWriter;
-import org.apache.arrow.vector.ipc.WriteChannel;
-import org.apache.arrow.vector.types.pojo.Schema;
 
 import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.channels.Channels;
 import java.nio.channels.WritableByteChannel;
-import java.util.List;
 
+/**
+ * Writer for the Arrow stream format to send ArrowRecordBatches over a WriteChannel
+ */
 public class ArrowStreamWriter extends ArrowWriter {
 
+  /**
+   * Construct an ArrowStreamWriter with an optional DictionaryProvider for the OutputStream.
+   *
+   * @param root Existing VectorSchemaRoot with vectors to be written.
+   * @param provider DictionaryProvider for any vectors that are dictionary encoded.
+   *                 (Optional, can be null)
+   * @param out OutputStream for writing.
+   */
   public ArrowStreamWriter(VectorSchemaRoot root, DictionaryProvider provider, OutputStream out) {
     this(root, provider, Channels.newChannel(out));
   }
 
+  /**
+   * Construct an ArrowStreamWriter with an optional DictionaryProvider for the WritableByteChannel.
+   *
+   * @param root Existing VectorSchemaRoot with vectors to be written.
+   * @param provider DictionaryProvider for any vectors that are dictionary encoded.
+   *                 (Optional, can be null)
+   * @param out WritableByteChannel for writing.
+   */
   public ArrowStreamWriter(VectorSchemaRoot root, DictionaryProvider provider, WritableByteChannel out) {
     super(root, provider, out);
   }
 
-  @Override
-  protected void startInternal(WriteChannel out) throws IOException {
+  /**
+   * Write an EOS identifier to the WriteChannel.
+   *
+   * @param out Open WriteChannel with an active Arrow stream.
+   * @throws IOException
+   */
+  public static void writeEndOfStream(WriteChannel out) throws IOException {
+    out.writeIntLittleEndian(0);
   }
 
   @Override
-  protected void endInternal(WriteChannel out,
-                             Schema schema,
-                             List<ArrowBlock> dictionaries,
-                             List<ArrowBlock> records) throws IOException {
-    out.writeIntLittleEndian(0);
+  protected void endInternal(WriteChannel out) throws IOException {
+    writeEndOfStream(out);
   }
 }

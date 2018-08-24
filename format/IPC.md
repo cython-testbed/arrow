@@ -138,10 +138,6 @@ struct FieldNode {
 }
 
 struct Buffer {
-  /// The shared memory page id where this buffer is located. Currently this is
-  /// not used
-  page: int;
-
   /// The relative offset into the shared memory page where the bytes for this
   /// buffer starts
   offset: long;
@@ -240,8 +236,9 @@ tools. Arrow implementations in general are not required to implement this data
 format, though we provide a reference implementation in C++.
 
 When writing a standalone encapsulated tensor message, we use the format as
-indicated above, but additionally align the starting offset (if writing to a
-shared memory region) to be a multiple of 8:
+indicated above, but additionally align the starting offset of the metadata as
+well as the starting offset of the tensor body (if writing to a shared memory
+region) to be multiples of 64 bytes:
 
 ```
 <PADDING>

@@ -44,7 +44,7 @@ class ARROW_EXPORT FileOutputStream : public OutputStream {
   /// \param[out] out a base interface OutputStream instance
   ///
   /// When opening a new file, any existing file with the indicated path is
-  /// truncated to 0 bytes, deleting any existing memory
+  /// truncated to 0 bytes, deleting any existing data
   static Status Open(const std::string& path, std::shared_ptr<OutputStream>* out);
 
   /// \brief Open a local file for writing
@@ -54,12 +54,21 @@ class ARROW_EXPORT FileOutputStream : public OutputStream {
   static Status Open(const std::string& path, bool append,
                      std::shared_ptr<OutputStream>* out);
 
+  /// \brief Open a file descriptor for writing.  The underlying file isn't
+  /// truncated.
+  /// \param[in] fd file descriptor
+  /// \param[out] out a base interface OutputStream instance
+  ///
+  /// The file descriptor becomes owned by the OutputStream, and will be closed
+  /// on Close() or destruction.
+  static Status Open(int fd, std::shared_ptr<OutputStream>* out);
+
   /// \brief Open a local file for writing, truncating any existing file
   /// \param[in] path with UTF8 encoding
   /// \param[out] file a FileOutputStream instance
   ///
   /// When opening a new file, any existing file with the indicated path is
-  /// truncated to 0 bytes, deleting any existing memory
+  /// truncated to 0 bytes, deleting any existing data
   static Status Open(const std::string& path, std::shared_ptr<FileOutputStream>* file);
 
   /// \brief Open a local file for writing
@@ -68,6 +77,15 @@ class ARROW_EXPORT FileOutputStream : public OutputStream {
   /// \param[out] file a FileOutputStream instance
   static Status Open(const std::string& path, bool append,
                      std::shared_ptr<FileOutputStream>* file);
+
+  /// \brief Open a file descriptor for writing.  The underlying file isn't
+  /// truncated.
+  /// \param[in] fd file descriptor
+  /// \param[out] out a FileOutputStream instance
+  ///
+  /// The file descriptor becomes owned by the OutputStream, and will be closed
+  /// on Close() or destruction.
+  static Status Open(int fd, std::shared_ptr<FileOutputStream>* out);
 
   // OutputStream interface
   Status Close() override;
@@ -103,6 +121,25 @@ class ARROW_EXPORT ReadableFile : public RandomAccessFile {
   /// Open file with one's own memory pool for memory allocations
   static Status Open(const std::string& path, MemoryPool* pool,
                      std::shared_ptr<ReadableFile>* file);
+
+  /// \brief Open a local file for reading
+  /// \param[in] fd file descriptor
+  /// \param[out] file ReadableFile instance
+  /// Open file with one's own memory pool for memory allocations
+  ///
+  /// The file descriptor becomes owned by the ReadableFile, and will be closed
+  /// on Close() or destruction.
+  static Status Open(int fd, std::shared_ptr<ReadableFile>* file);
+
+  /// \brief Open a local file for reading
+  /// \param[in] fd file descriptor
+  /// \param[in] pool a MemoryPool for memory allocations
+  /// \param[out] file ReadableFile instance
+  /// Open file with one's own memory pool for memory allocations
+  ///
+  /// The file descriptor becomes owned by the ReadableFile, and will be closed
+  /// on Close() or destruction.
+  static Status Open(int fd, MemoryPool* pool, std::shared_ptr<ReadableFile>* file);
 
   Status Close() override;
   Status Tell(int64_t* position) const override;
@@ -158,19 +195,26 @@ class ARROW_EXPORT MemoryMappedFile : public ReadWriteFileInterface {
   // Required by RandomAccessFile, copies memory into out. Not thread-safe
   Status Read(int64_t nbytes, int64_t* bytes_read, void* out) override;
 
-  // Zero copy read. Not thread-safe
+  // Zero copy read, moves position pointer. Not thread-safe
   Status Read(int64_t nbytes, std::shared_ptr<Buffer>* out) override;
 
+  // Zero-copy read, leaves position unchanged. Acquires a reader lock
+  // for the duration of slice creation (typically very short). Is thread-safe.
+  Status ReadAt(int64_t position, int64_t nbytes, std::shared_ptr<Buffer>* out) override;
+
+  // Raw copy of the memory at specified position. Thread-safe, but
+  // locks out other readers for the duration of memcpy. Prefer the
+  // zero copy method
   Status ReadAt(int64_t position, int64_t nbytes, int64_t* bytes_read,
                 void* out) override;
-
-  /// Default implementation is thread-safe
-  Status ReadAt(int64_t position, int64_t nbytes, std::shared_ptr<Buffer>* out) override;
 
   bool supports_zero_copy() const override;
 
   /// Write data at the current position in the file. Thread-safe
   Status Write(const void* data, int64_t nbytes) override;
+
+  /// Set the size of the map to new_size.
+  Status Resize(int64_t new_size);
 
   /// Write data at a particular position in the file. Thread-safe
   Status WriteAt(int64_t position, const void* data, int64_t nbytes) override;

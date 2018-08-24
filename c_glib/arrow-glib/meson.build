@@ -26,6 +26,7 @@ sources = files(
   'column.cpp',
   'composite-array.cpp',
   'composite-data-type.cpp',
+  'decimal.cpp',
   'error.cpp',
   'field.cpp',
   'record-batch.cpp',
@@ -56,6 +57,12 @@ sources += files(
   'compute.cpp',
 )
 
+if arrow_orc_dependency.found()
+  sources += files(
+    'orc-file-reader.cpp',
+  )
+endif
+
 c_headers = files(
   'array.h',
   'array-builder.h',
@@ -68,6 +75,7 @@ c_headers = files(
   'composite-array.h',
   'composite-data-type.h',
   'data-type.h',
+  'decimal.h',
   'error.h',
   'field.h',
   'gobject-type.h',
@@ -100,6 +108,12 @@ c_headers += files(
   'compute.h',
 )
 
+if arrow_orc_dependency.found()
+  c_headers += files(
+    'orc-file-reader.h',
+  )
+endif
+
 
 cpp_headers = files(
   'array.hpp',
@@ -111,6 +125,7 @@ cpp_headers = files(
   'chunked-array.hpp',
   'column.hpp',
   'data-type.hpp',
+  'decimal.hpp',
   'error.hpp',
   'field.hpp',
   'record-batch.hpp',
@@ -141,6 +156,21 @@ cpp_headers += files(
   'compute.hpp',
 )
 
+if arrow_orc_dependency.found()
+  cpp_headers += files(
+    'orc-file-reader.hpp',
+  )
+endif
+
+version_h_conf = configuration_data()
+version_h_conf.set('GARROW_VERSION_MAJOR', version_major)
+version_h_conf.set('GARROW_VERSION_MINOR', version_minor)
+version_h_conf.set('GARROW_VERSION_MICRO', version_micro)
+version_h_conf.set('GARROW_VERSION_TAG', version_tag)
+version_h = configure_file(input: 'version.h.in',
+                           output: 'version.h',
+                           configuration: version_h_conf)
+c_headers += version_h
 
 enums = gnome.mkenums('enums',
                       sources: c_headers,
@@ -184,8 +214,14 @@ pkgconfig.generate(filebase: meson.project_name(),
                    description: 'C API for Apache Arrow based on GLib',
                    version: version,
                    requires: ['gio-2.0', 'arrow'],
-                   libraries: [libarrow_glib],
-                   subdirs: ['arrow-glib'])
+                   libraries: [libarrow_glib])
+if arrow_orc_dependency.found()
+  pkgconfig.generate(filebase: 'arrow-orc-glib',
+                     name: 'Apache Arrow GLib ORC',
+                     description: 'ORC modules for Apache Arrow GLib',
+                     version: version,
+                     requires: ['arrow-glib'])
+endif
 
 arrow_glib_gir = gnome.generate_gir(libarrow_glib,
                                     sources: sources + c_headers + enums,

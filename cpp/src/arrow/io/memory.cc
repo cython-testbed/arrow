@@ -68,6 +68,7 @@ Status BufferOutputStream::Close() {
 
 Status BufferOutputStream::Finish(std::shared_ptr<Buffer>* result) {
   RETURN_NOT_OK(Close());
+  buffer_->ZeroPadding();
   *result = buffer_;
   buffer_ = nullptr;
   is_open_ = false;
@@ -150,8 +151,8 @@ class FixedSizeBufferWriter::FixedSizeBufferWriterImpl {
   }
 
   Status Seek(int64_t position) {
-    if (position < 0 || position >= size_) {
-      return Status::IOError("position out of bounds");
+    if (position < 0 || position > size_) {
+      return Status::IOError("Seek out of bounds");
     }
     position_ = position;
     return Status::OK();
@@ -163,6 +164,9 @@ class FixedSizeBufferWriter::FixedSizeBufferWriterImpl {
   }
 
   Status Write(const void* data, int64_t nbytes) {
+    if (position_ + nbytes > size_) {
+      return Status::IOError("Write out of bounds");
+    }
     if (nbytes > memcopy_threshold_ && memcopy_num_threads_ > 1) {
       internal::parallel_memcopy(mutable_data_ + position_,
                                  reinterpret_cast<const uint8_t*>(data), nbytes,
@@ -256,36 +260,43 @@ Status BufferReader::Tell(int64_t* position) const {
 
 bool BufferReader::supports_zero_copy() const { return true; }
 
-Status BufferReader::Read(int64_t nbytes, int64_t* bytes_read, void* buffer) {
-  *bytes_read = std::min(nbytes, size_ - position_);
-  if (*bytes_read) {
-    memcpy(buffer, data_ + position_, *bytes_read);
-    position_ += *bytes_read;
-  }
-  return Status::OK();
-}
-
-Status BufferReader::Read(int64_t nbytes, std::shared_ptr<Buffer>* out) {
-  int64_t size = std::min(nbytes, size_ - position_);
-
-  if (size > 0 && buffer_ != nullptr) {
-    *out = SliceBuffer(buffer_, position_, size);
-  } else {
-    *out = std::make_shared<Buffer>(data_ + position_, size);
-  }
-
-  position_ += size;
-  return Status::OK();
-}
-
 Status BufferReader::ReadAt(int64_t position, int64_t nbytes, int64_t* bytes_read,
-                            void* out) {
-  return RandomAccessFile::ReadAt(position, nbytes, bytes_read, out);
+                            void* buffer) {
+  if (nbytes < 0) {
+    return Status::IOError("Cannot read a negative number of bytes from BufferReader.");
+  }
+  *bytes_read = std::min(nbytes, size_ - position);
+  if (*bytes_read) {
+    memcpy(buffer, data_ + position, *bytes_read);
+  }
+  return Status::OK();
 }
 
 Status BufferReader::ReadAt(int64_t position, int64_t nbytes,
                             std::shared_ptr<Buffer>* out) {
-  return RandomAccessFile::ReadAt(position, nbytes, out);
+  if (nbytes < 0) {
+    return Status::IOError("Cannot read a negative number of bytes from BufferReader.");
+  }
+  int64_t size = std::min(nbytes, size_ - position);
+
+  if (size > 0 && buffer_ != nullptr) {
+    *out = SliceBuffer(buffer_, position, size);
+  } else {
+    *out = std::make_shared<Buffer>(data_ + position, size);
+  }
+  return Status::OK();
+}
+
+Status BufferReader::Read(int64_t nbytes, int64_t* bytes_read, void* buffer) {
+  RETURN_NOT_OK(ReadAt(position_, nbytes, bytes_read, buffer));
+  position_ += *bytes_read;
+  return Status::OK();
+}
+
+Status BufferReader::Read(int64_t nbytes, std::shared_ptr<Buffer>* out) {
+  RETURN_NOT_OK(ReadAt(position_, nbytes, out));
+  position_ += (*out)->size();
+  return Status::OK();
 }
 
 Status BufferReader::GetSize(int64_t* size) {
@@ -294,8 +305,8 @@ Status BufferReader::GetSize(int64_t* size) {
 }
 
 Status BufferReader::Seek(int64_t position) {
-  if (position < 0 || position >= size_) {
-    return Status::IOError("position out of bounds");
+  if (position < 0 || position > size_) {
+    return Status::IOError("Seek out of bounds");
   }
 
   position_ = position;

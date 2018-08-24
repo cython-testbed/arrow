@@ -51,15 +51,13 @@ table Field {
   name: string;
   nullable: bool;
   type: Type;
-  // present only if the field is dictionary encoded
-  // will point to a dictionary provided by a DictionaryBatch message
-  dictionary: long;
+
+  // Present only if the field is dictionary encoded
+  dictionary: DictionaryEncoding;
+
   // children apply only to Nested data types like Struct, List and Union
   children: [Field];
-  /// layout of buffers produced for this type (as derived from the Type)
-  /// does not include children
-  /// each recordbatch will return instances of those Buffers.
-  layout: [ VectorLayout ];
+
   // User-defined metadata
   custom_metadata: [ KeyValue ];
 }
@@ -68,7 +66,7 @@ table Field {
 The `type` is the logical type of the field. Nested types, such as List,
 Struct, and Union, have a sequence of child fields.
 
-a JSON representation of the schema is also provided:
+A JSON representation of the schema is also provided:
 Field:
 ```
 {
@@ -76,18 +74,9 @@ Field:
   "nullable" : false,
   "type" : /* Type */,
   "children" : [ /* Field */ ],
-  "typeLayout" : {
-    "vectors" : [ /* VectorLayout */ ]
-  }
 }
 ```
-VectorLayout:
-```
-{
-  "type" : "DATA|OFFSET|VALIDITY|TYPE",
-  "typeBitWidth" : /* int */
-}
-```
+
 Type:
 ```
 {
@@ -95,6 +84,7 @@ Type:
   // fields as defined in the Flatbuffer depending on the type name
 }
 ```
+
 Union:
 ```
 {
@@ -373,7 +363,7 @@ according to the child logical type (e.g. `List<Utf8>` vs. `List<Boolean>`).
 
 We specify two logical types for variable length bytes:
 
-* `Utf8` data is unicode values with UTF-8 encoding
+* `Utf8` data is Unicode values with UTF-8 encoding
 * `Binary` is any other variable length bytes
 
 These types both have the same memory layout as the nested type `List<UInt8>`,

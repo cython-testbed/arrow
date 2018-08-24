@@ -100,8 +100,8 @@ def assert_equal(obj1, obj2):
         for i in range(len(obj1)):
             assert_equal(obj1[i], obj2[i])
     else:
-        assert obj1 == obj2, ("Objects {} and {} are different."
-                              .format(obj1, obj2))
+        assert type(obj1) == type(obj2) and obj1 == obj2, \
+                "Objects {} and {} are different.".format(obj1, obj2)
 
 
 PRIMITIVE_OBJECTS = [
@@ -115,7 +115,8 @@ PRIMITIVE_OBJECTS = [
     {True: "hello", False: "world"}, {"hello": "world", 1: 42, 2.5: 45},
     {"hello": set([2, 3]), "world": set([42.0]), "this": None},
     np.int8(3), np.int32(4), np.int64(5),
-    np.uint8(3), np.uint32(4), np.uint64(5), np.float16(1.9), np.float32(1.9),
+    np.uint8(3), np.uint32(4), np.uint64(5),
+    np.float16(1.9), np.float32(1.9),
     np.float64(1.9), np.zeros([8, 20]),
     np.random.normal(size=[17, 10]), np.array(["hi", 3]),
     np.array(["hi", 3], dtype=object),
@@ -288,6 +289,25 @@ def test_primitive_serialization(large_buffer):
         serialization_roundtrip(obj, large_buffer)
 
 
+def test_integer_limits(large_buffer):
+    # Check that Numpy scalars can be represented up to their limit values
+    # (except np.uint64 which is limited to 2**63 - 1)
+    for dt in [np.int8, np.int64, np.int32, np.int64,
+               np.uint8, np.uint64, np.uint32, np.uint64]:
+        scal = dt(np.iinfo(dt).min)
+        serialization_roundtrip(scal, large_buffer)
+        if dt is not np.uint64:
+            scal = dt(np.iinfo(dt).max)
+            serialization_roundtrip(scal, large_buffer)
+        else:
+            scal = dt(2**63 - 1)
+            serialization_roundtrip(scal, large_buffer)
+            for v in (2**63, 2**64 - 1):
+                scal = dt(v)
+                with pytest.raises(pa.ArrowInvalid):
+                    pa.serialize(scal)
+
+
 def test_serialize_to_buffer():
     for nthreads in [1, 4]:
         for value in COMPLEX_OBJECTS:
@@ -315,8 +335,11 @@ def test_default_dict_serialization(large_buffer):
 
 def test_numpy_serialization(large_buffer):
     for t in ["bool", "int8", "uint8", "int16", "uint16", "int32",
-              "uint32", "float16", "float32", "float64"]:
+              "uint32", "float16", "float32", "float64", "<U1", "<U2", "<U3",
+              "<U4", "|S1", "|S2", "|S3", "|S4", "|O"]:
         obj = np.random.randint(0, 10, size=(100, 100)).astype(t)
+        serialization_roundtrip(obj, large_buffer)
+        obj = obj[1:99, 10:90]
         serialization_roundtrip(obj, large_buffer)
 
 
@@ -360,6 +383,21 @@ def test_torch_serialization(large_buffer):
         obj = torch.from_numpy(np.random.randn(1000).astype(t))
         serialization_roundtrip(obj, large_buffer,
                                 context=serialization_context)
+
+    tensor_requiring_grad = torch.randn(10, 10, requires_grad=True)
+    serialization_roundtrip(tensor_requiring_grad, large_buffer,
+                            context=serialization_context)
+
+
+@pytest.mark.skipif(not torch or not torch.cuda.is_available(),
+                    reason="requires pytorch with CUDA")
+def test_torch_cuda():
+    # ARROW-2920: This used to segfault if torch is not imported
+    # before pyarrow
+    # Note that this test will only catch the issue if it is run
+    # with a pyarrow that has been built in the manylinux1 environment
+    torch.nn.Conv2d(64, 2, kernel_size=3, stride=1,
+                    padding=1, bias=False).cuda()
 
 
 def test_numpy_immutable(large_buffer):
@@ -589,7 +627,7 @@ def test_serialize_to_components_invalid_cases():
         'data': [buf]
     }
 
-    with pytest.raises(pa.ArrowException):
+    with pytest.raises(pa.ArrowInvalid):
         pa.deserialize_components(components)
 
     components = {
@@ -598,7 +636,7 @@ def test_serialize_to_components_invalid_cases():
         'data': [buf, buf]
     }
 
-    with pytest.raises(pa.ArrowException):
+    with pytest.raises(pa.ArrowInvalid):
         pa.deserialize_components(components)
 
 
@@ -691,3 +729,33 @@ def test_path_objects(tmpdir):
     pa.serialize_to(obj, p)
     res = pa.deserialize_from(p, None)
     assert res == obj
+
+
+def test_tensor_alignment():
+    # Deserialized numpy arrays should be 64-byte aligned.
+    x = np.random.normal(size=(10, 20, 30))
+    y = pa.deserialize(pa.serialize(x).to_buffer())
+    assert y.ctypes.data % 64 == 0
+
+    xs = [np.random.normal(size=i) for i in range(100)]
+    ys = pa.deserialize(pa.serialize(xs).to_buffer())
+    for y in ys:
+        assert y.ctypes.data % 64 == 0
+
+    xs = [np.random.normal(size=i * (1,)) for i in range(20)]
+    ys = pa.deserialize(pa.serialize(xs).to_buffer())
+    for y in ys:
+        assert y.ctypes.data % 64 == 0
+
+    xs = [np.random.normal(size=i * (5,)) for i in range(1, 8)]
+    xs = [xs[i][(i + 1) * (slice(1, 3),)] for i in range(len(xs))]
+    ys = pa.deserialize(pa.serialize(xs).to_buffer())
+    for y in ys:
+        assert y.ctypes.data % 64 == 0
+
+
+def test_serialization_determinism():
+    for obj in COMPLEX_OBJECTS:
+        buf1 = pa.serialize(obj).to_buffer()
+        buf2 = pa.serialize(obj).to_buffer()
+        assert buf1.to_pybytes() == buf2.to_pybytes()

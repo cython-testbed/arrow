@@ -15,12 +15,20 @@
 # specific language governing permissions and limitations
 # under the License.
 
+from collections import OrderedDict
 import pickle
 
 import pytest
 import numpy as np
 
 import pyarrow as pa
+
+
+def test_schema_constructor_errors():
+    msg = ("Do not call Schema's constructor directly, use `pyarrow.schema` "
+           "instead")
+    with pytest.raises(TypeError, match=msg):
+        pa.Schema()
 
 
 def test_type_integers():
@@ -75,9 +83,7 @@ def test_type_comparisons():
     val = pa.int32()
     assert val == pa.int32()
     assert val == 'int32'
-
-    with pytest.raises(TypeError):
-        val == 5
+    assert val != 5
 
 
 def test_type_for_alias():
@@ -192,19 +198,6 @@ def test_from_numpy_dtype():
         pa.from_numpy_dtype('not_convertible_to_dtype')
 
 
-def test_field():
-    t = pa.string()
-    f = pa.field('foo', t)
-
-    assert f.name == 'foo'
-    assert f.nullable
-    assert f.type is t
-    assert repr(f) == "pyarrow.Field<foo: string>"
-
-    f = pa.field('foo', t, False)
-    assert not f.nullable
-
-
 def test_schema():
     fields = [
         pa.field('foo', pa.int32()),
@@ -214,6 +207,7 @@ def test_schema():
     sch = pa.schema(fields)
 
     assert sch.names == ['foo', 'bar', 'baz']
+    assert sch.types == [pa.int32(), pa.string(), pa.list_(pa.int8())]
 
     assert len(sch) == 3
     assert sch[0].name == 'foo'
@@ -228,32 +222,58 @@ baz: list<item: int8>
   child 0, item: int8"""
 
 
-def test_field_empty():
-    f = pa.Field()
-    with pytest.raises(ReferenceError):
-        repr(f)
+def test_schema_from_tuples():
+    fields = [
+        ('foo', pa.int32()),
+        ('bar', pa.string()),
+        ('baz', pa.list_(pa.int8())),
+    ]
+    sch = pa.schema(fields)
+    assert sch.names == ['foo', 'bar', 'baz']
+    assert sch.types == [pa.int32(), pa.string(), pa.list_(pa.int8())]
+    assert len(sch) == 3
+    assert repr(sch) == """\
+foo: int32
+bar: string
+baz: list<item: int8>
+  child 0, item: int8"""
 
 
-def test_field_add_remove_metadata():
-    f0 = pa.field('foo', pa.int32())
+def test_schema_from_mapping():
+    fields = OrderedDict([
+        ('foo', pa.int32()),
+        ('bar', pa.string()),
+        ('baz', pa.list_(pa.int8())),
+    ])
+    sch = pa.schema(fields)
+    assert sch.names == ['foo', 'bar', 'baz']
+    assert sch.types == [pa.int32(), pa.string(), pa.list_(pa.int8())]
+    assert len(sch) == 3
+    assert repr(sch) == """\
+foo: int32
+bar: string
+baz: list<item: int8>
+  child 0, item: int8"""
 
-    assert f0.metadata is None
 
-    metadata = {b'foo': b'bar', b'pandas': b'badger'}
+def test_field_flatten():
+    f0 = pa.field('foo', pa.int32()).add_metadata({b'foo': b'bar'})
+    assert f0.flatten() == [f0]
 
-    f1 = f0.add_metadata(metadata)
-    assert f1.metadata == metadata
+    f1 = pa.field('bar', pa.float64(), nullable=False)
+    ff = pa.field('ff', pa.struct([f0, f1]), nullable=False)
+    assert ff.flatten() == [
+        pa.field('ff.foo', pa.int32()).add_metadata({b'foo': b'bar'}),
+        pa.field('ff.bar', pa.float64(), nullable=False)]  # XXX
 
-    f3 = f1.remove_metadata()
-    assert f3.metadata is None
+    # Nullable parent makes flattened child nullable
+    ff = pa.field('ff', pa.struct([f0, f1]))
+    assert ff.flatten() == [
+        pa.field('ff.foo', pa.int32()).add_metadata({b'foo': b'bar'}),
+        pa.field('ff.bar', pa.float64())]
 
-    # idempotent
-    f4 = f3.remove_metadata()
-    assert f4.metadata is None
-
-    f5 = pa.field('foo', pa.int32(), True, metadata)
-    f6 = f0.add_metadata(metadata)
-    assert f5.equals(f6)
+    fff = pa.field('fff', pa.struct([ff]))
+    assert fff.flatten() == [pa.field('fff.ff', pa.struct([f0, f1]))]
 
 
 def test_schema_add_remove_metadata():
@@ -286,14 +306,45 @@ def test_schema_equals():
         pa.field('bar', pa.string()),
         pa.field('baz', pa.list_(pa.int8()))
     ]
+    metadata = {b'foo': b'bar', b'pandas': b'badger'}
 
     sch1 = pa.schema(fields)
     sch2 = pa.schema(fields)
+    sch3 = pa.schema(fields, metadata=metadata)
+    sch4 = pa.schema(fields, metadata=metadata)
+
     assert sch1.equals(sch2)
+    assert sch3.equals(sch4)
+    assert sch1.equals(sch3, check_metadata=False)
+    assert not sch1.equals(sch3, check_metadata=True)
+    assert not sch1.equals(sch3)
 
     del fields[-1]
     sch3 = pa.schema(fields)
     assert not sch1.equals(sch3)
+
+
+def test_schema_equality_operators():
+    fields = [
+        pa.field('foo', pa.int32()),
+        pa.field('bar', pa.string()),
+        pa.field('baz', pa.list_(pa.int8()))
+    ]
+    metadata = {b'foo': b'bar', b'pandas': b'badger'}
+
+    sch1 = pa.schema(fields)
+    sch2 = pa.schema(fields)
+    sch3 = pa.schema(fields, metadata=metadata)
+    sch4 = pa.schema(fields, metadata=metadata)
+
+    assert sch1 == sch2
+    assert sch3 == sch4
+    assert sch1 != sch3
+    assert sch2 != sch4
+
+    # comparison with other types doesn't raise
+    assert sch1 != []
+    assert sch3 != 'foo'
 
 
 def test_schema_negative_indexing():
@@ -327,7 +378,12 @@ def test_schema_repr_with_dictionaries():
     expected = (
         """\
 one: dictionary<values=string, indices=int16, ordered=0>
-  dictionary: ["foo", "bar", "baz"]
+  dictionary:
+    [
+      "foo",
+      "bar",
+      "baz"
+    ]
 two: int32""")
 
     assert repr(sch) == expected

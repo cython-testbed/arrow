@@ -20,11 +20,14 @@
 
 #include <array>
 #include <cstdint>
+#include <limits>
+#include <sstream>
 #include <string>
 #include <type_traits>
 
 #include "arrow/status.h"
 #include "arrow/util/macros.h"
+#include "arrow/util/type_traits.h"
 #include "arrow/util/visibility.h"
 
 namespace arrow {
@@ -126,8 +129,28 @@ class ARROW_EXPORT Decimal128 {
   static Status FromString(const std::string& s, Decimal128* out,
                            int32_t* precision = NULLPTR, int32_t* scale = NULLPTR);
 
+  /// \brief Convert from a big endian byte representation. The length must be
+  ///        between 1 and 16
+  /// \return error status if the length is an invalid value
+  static Status FromBigEndian(const uint8_t* data, int32_t length, Decimal128* out);
+
   /// \brief Convert Decimal128 from one scale to another
   Status Rescale(int32_t original_scale, int32_t new_scale, Decimal128* out) const;
+
+  /// \brief Convert to a signed integer
+  template <typename T, typename = EnableIfIsOneOf<T, int32_t, int64_t>>
+  Status ToInteger(T* out) const {
+    constexpr auto min_value = std::numeric_limits<T>::min();
+    constexpr auto max_value = std::numeric_limits<T>::max();
+    const auto& self = *this;
+    if (self < min_value || self > max_value) {
+      std::stringstream buf;
+      buf << "Invalid cast from Decimal128 to " << sizeof(T) << " byte integer";
+      return Status::Invalid(buf.str());
+    }
+    *out = static_cast<T>(low_bits_);
+    return Status::OK();
+  }
 
  private:
   int64_t high_bits_;

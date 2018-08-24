@@ -46,6 +46,15 @@ class ARROW_EXPORT CudaBuffer : public Buffer {
 
   ~CudaBuffer();
 
+  /// \brief Convert back generic buffer into CudaBuffer
+  /// \param[in] buffer buffer to convert
+  /// \param[out] out conversion result
+  /// \return Status
+  ///
+  /// This function returns an error if the buffer isn't backed by GPU memory
+  static Status FromBuffer(std::shared_ptr<Buffer> buffer,
+                           std::shared_ptr<CudaBuffer>* out);
+
   /// \brief Copy memory from GPU device to CPU host
   /// \param[out] out a pre-allocated output buffer
   /// \return Status
@@ -123,8 +132,8 @@ class ARROW_EXPORT CudaIpcMemHandle {
 /// able to do anything other than pointer arithmetic on the returned buffers
 class ARROW_EXPORT CudaBufferReader : public io::BufferReader {
  public:
-  explicit CudaBufferReader(const std::shared_ptr<CudaBuffer>& buffer);
-  ~CudaBufferReader();
+  explicit CudaBufferReader(const std::shared_ptr<Buffer>& buffer);
+  ~CudaBufferReader() override;
 
   /// \brief Read bytes into pre-allocated host memory
   /// \param[in] nbytes number of bytes to read
@@ -148,7 +157,7 @@ class ARROW_EXPORT CudaBufferReader : public io::BufferReader {
 class ARROW_EXPORT CudaBufferWriter : public io::WriteableFile {
  public:
   explicit CudaBufferWriter(const std::shared_ptr<CudaBuffer>& buffer);
-  ~CudaBufferWriter();
+  ~CudaBufferWriter() override;
 
   /// \brief Close writer and flush buffered bytes to GPU
   Status Close() override;

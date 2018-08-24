@@ -21,12 +21,16 @@ set -e
 
 source $TRAVIS_BUILD_DIR/ci/travis_env_common.sh
 
-# Check licenses according to Apache policy
-git archive HEAD --prefix=apache-arrow/ --output=arrow-src.tar.gz
-./dev/release/run-rat.sh arrow-src.tar.gz
-
 pushd $CPP_BUILD_DIR
 
-ctest -VV -L unittest
+ctest -j2 --output-on-failure -L unittest
 
 popd
+
+# Capture C++ coverage info (we wipe the build dir in travis_script_python.sh)
+if [ "$ARROW_TRAVIS_COVERAGE" == "1" ]; then
+    pushd $TRAVIS_BUILD_DIR
+    lcov --quiet --directory . --capture --no-external --output-file $ARROW_CPP_COVERAGE_FILE \
+        2>&1 | grep -v "WARNING: no data found for /usr/include"
+    popd
+fi
