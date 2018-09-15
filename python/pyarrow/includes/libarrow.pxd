@@ -903,8 +903,13 @@ cdef extern from "arrow/compute/api.h" namespace "arrow::compute" nogil:
         CFunctionContext(CMemoryPool* pool)
 
     cdef cppclass CCastOptions" arrow::compute::CastOptions":
+        CCastOptions()
+        CCastOptions(c_bool safe)
+        CCastOptions Safe()
+        CCastOptions Unsafe()
         c_bool allow_int_overflow
         c_bool allow_time_truncate
+        c_bool allow_float_truncate
 
     enum DatumType" arrow::compute::Datum::type":
         DatumType_NONE" arrow::compute::Datum::NONE"
@@ -968,6 +973,12 @@ cdef extern from "arrow/python/api.h" namespace "arrow::py" nogil:
                            const shared_ptr[CDataType]& type,
                            shared_ptr[CChunkedArray]* out)
 
+    CStatus NdarrayToArrow(CMemoryPool* pool, object ao, object mo,
+                           c_bool from_pandas,
+                           const shared_ptr[CDataType]& type,
+                           const CCastOptions& cast_options,
+                           shared_ptr[CChunkedArray]* out)
+
     CStatus NdarrayToTensor(CMemoryPool* pool, object ao,
                             shared_ptr[CTensor]* out)
 
@@ -1018,6 +1029,7 @@ cdef extern from "arrow/python/api.h" namespace "arrow::py" nogil:
         c_bool strings_to_categorical
         c_bool zero_copy_only
         c_bool integer_object_nulls
+        c_bool date_as_object
         c_bool use_threads
 
 cdef extern from "arrow/python/api.h" namespace 'arrow::py' nogil:

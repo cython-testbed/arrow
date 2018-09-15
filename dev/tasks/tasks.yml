@@ -175,7 +175,7 @@ tasks:
     params:
       numpy_build_version: 1.10.4
       numpy_test_version: 1.14.0
-      pandas_version: 0.20.3
+      pandas_version: 0.23.0
       python_version: 2.7
     artifacts:
       - pyarrow-{version}-cp27-cp27m-macosx_10_6_intel.whl
@@ -186,7 +186,7 @@ tasks:
     params:
       numpy_build_version: 1.10.4
       numpy_test_version: 1.14.0
-      pandas_version: 0.20.3
+      pandas_version: 0.23.0
       python_version: 3.5
     artifacts:
       - pyarrow-{version}-cp35-cp35m-macosx_10_6_intel.whl
@@ -197,7 +197,7 @@ tasks:
     params:
       numpy_build_version: 1.11.3
       numpy_test_version: 1.14.0
-      pandas_version: 0.20.3
+      pandas_version: 0.23.0
       python_version: 3.6
     artifacts:
       - pyarrow-{version}-cp36-cp36m-macosx_10_6_intel.whl
@@ -243,19 +243,19 @@ tasks:
       - libarrow-dev_{version}-1_amd64.deb
       - libarrow-glib-dev_{version}-1_amd64.deb
       - libarrow-glib-doc_{version}-1_all.deb
-      - libarrow-glib0-dbgsym_{version}-1_amd64.deb
-      - libarrow-glib0_{version}-1_amd64.deb
+      - libarrow-glib11-dbgsym_{version}-1_amd64.deb
+      - libarrow-glib11_{version}-1_amd64.deb
       - libarrow-gpu-dev_{version}-1_amd64.deb
       - libarrow-gpu-glib-dev_{version}-1_amd64.deb
-      - libarrow-gpu-glib0-dbgsym_{version}-1_amd64.deb
-      - libarrow-gpu-glib0_{version}-1_amd64.deb
-      - libarrow-gpu10-dbgsym_{version}-1_amd64.deb
-      - libarrow-gpu10_{version}-1_amd64.deb
+      - libarrow-gpu-glib11-dbgsym_{version}-1_amd64.deb
+      - libarrow-gpu-glib11_{version}-1_amd64.deb
+      - libarrow-gpu11-dbgsym_{version}-1_amd64.deb
+      - libarrow-gpu11_{version}-1_amd64.deb
       - libarrow-python-dev_{version}-1_amd64.deb
-      - libarrow-python10-dbgsym_{version}-1_amd64.deb
-      - libarrow-python10_{version}-1_amd64.deb
-      - libarrow10-dbgsym_{version}-1_amd64.deb
-      - libarrow10_{version}-1_amd64.deb
+      - libarrow-python11-dbgsym_{version}-1_amd64.deb
+      - libarrow-python11_{version}-1_amd64.deb
+      - libarrow11-dbgsym_{version}-1_amd64.deb
+      - libarrow11_{version}-1_amd64.deb
 
   ubuntu-trusty:
     platform: linux
@@ -275,8 +275,8 @@ tasks:
       - libarrow-dev_{version}-1_amd64.deb
       - libarrow-glib-dev_{version}-1_amd64.deb
       - libarrow-glib-doc_{version}-1_all.deb
-      - libarrow-glib0_{version}-1_amd64.deb
-      - libarrow10_{version}-1_amd64.deb
+      - libarrow-glib11_{version}-1_amd64.deb
+      - libarrow11_{version}-1_amd64.deb
 
   ubuntu-xenial:
     platform: linux
@@ -297,14 +297,14 @@ tasks:
       - libarrow-dev_{version}-1_amd64.deb
       - libarrow-glib-dev_{version}-1_amd64.deb
       - libarrow-glib-doc_{version}-1_all.deb
-      - libarrow-glib0_{version}-1_amd64.deb
+      - libarrow-glib11_{version}-1_amd64.deb
       - libarrow-gpu-dev_{version}-1_amd64.deb
       - libarrow-gpu-glib-dev_{version}-1_amd64.deb
-      - libarrow-gpu-glib0_{version}-1_amd64.deb
-      - libarrow-gpu10_{version}-1_amd64.deb
+      - libarrow-gpu-glib11_{version}-1_amd64.deb
+      - libarrow-gpu11_{version}-1_amd64.deb
       - libarrow-python-dev_{version}-1_amd64.deb
-      - libarrow-python10_{version}-1_amd64.deb
-      - libarrow10_{version}-1_amd64.deb
+      - libarrow-python11_{version}-1_amd64.deb
+      - libarrow11_{version}-1_amd64.deb
 
   ubuntu-bionic:
     platform: linux
@@ -325,14 +325,14 @@ tasks:
       - libarrow-dev_{version}-1_amd64.deb
       - libarrow-glib-dev_{version}-1_amd64.deb
       - libarrow-glib-doc_{version}-1_all.deb
-      - libarrow-glib0_{version}-1_amd64.deb
+      - libarrow-glib11_{version}-1_amd64.deb
       - libarrow-gpu-dev_{version}-1_amd64.deb
       - libarrow-gpu-glib-dev_{version}-1_amd64.deb
-      - libarrow-gpu-glib0_{version}-1_amd64.deb
-      - libarrow-gpu10_{version}-1_amd64.deb
+      - libarrow-gpu-glib11_{version}-1_amd64.deb
+      - libarrow-gpu11_{version}-1_amd64.deb
       - libarrow-python-dev_{version}-1_amd64.deb
-      - libarrow-python10_{version}-1_amd64.deb
-      - libarrow10_{version}-1_amd64.deb
+      - libarrow-python11_{version}-1_amd64.deb
+      - libarrow11_{version}-1_amd64.deb
 
   centos-6:
     platform: linux

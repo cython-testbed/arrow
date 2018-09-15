@@ -55,6 +55,7 @@ set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/cmake_modules")
 
 include(CMakeParseArguments)
 include(ExternalProject)
+include(FindPkgConfig)
 
 # This ensures that things like gnu++11 get passed correctly
 set(CMAKE_CXX_STANDARD 11)
@@ -264,8 +265,6 @@ Pass multiple labels by dividing with semicolons")
       "Brotli static lib suffix used on Windows with MSVC (default -static)")
     set(SNAPPY_MSVC_STATIC_LIB_SUFFIX "_static" CACHE STRING
       "Snappy static lib suffix used on Windows with MSVC (default is empty string)")
-    set(ZLIB_MSVC_STATIC_LIB_SUFFIX "libstatic" CACHE STRING
-      "Zlib static lib suffix used on Windows with MSVC (default libstatic)")
     set(LZ4_MSVC_STATIC_LIB_SUFFIX "_static" CACHE STRING
       "Lz4 static lib suffix used on Windows with MSVC (default _static)")
     set(ZSTD_MSVC_STATIC_LIB_SUFFIX "_static" CACHE STRING
@@ -275,6 +274,20 @@ Pass multiple labels by dividing with semicolons")
       "Build Arrow with statically linked CRT"
       OFF)
   endif()
+
+  # Parquet-related build options
+  option(ARROW_PARQUET
+    "Build the Parquet libraries"
+    OFF)
+
+  option(PARQUET_MINIMAL_DEPENDENCY
+    "Depend only on Thirdparty headers to build libparquet. \
+Always OFF if building binaries"
+    OFF)
+
+  set(PARQUET_ARROW_LINKAGE "shared" CACHE STRING
+    "How to link Arrow libraries with libparquet.so. static|shared (default shared)")
+
 endif()
 
 if(ARROW_BUILD_TESTS OR ARROW_BUILD_BENCHMARKS)
@@ -584,6 +597,8 @@ endif(UNIX)
 ############################################################
 
 set(ARROW_LINK_LIBS)
+
+# Libraries to link statically with libarrow.so
 set(ARROW_STATIC_LINK_LIBS)
 
 if (ARROW_WITH_BROTLI)
@@ -603,6 +618,9 @@ if (ARROW_WITH_SNAPPY)
 endif()
 
 if (ARROW_WITH_ZLIB)
+  if (ZLIB_SHARED_LIB)
+    SET(ARROW_LINK_LIBS zlib ${ARROW_LINK_LIBS})
+  endif()
   SET(ARROW_STATIC_LINK_LIBS zlib ${ARROW_STATIC_LINK_LIBS})
 endif()
 
@@ -619,18 +637,12 @@ if (ARROW_WITH_GRPC)
 endif()
 
 if (ARROW_ORC)
-  if (ARROW_PROTOBUF_USE_SHARED)
-    SET(ARROW_LINK_LIBS
-      protobuf
-      ${ARROW_LINK_LIBS})
-  else()
-    SET(ARROW_STATIC_LINK_LIBS
-      protobuf
-      ${ARROW_STATIC_LINK_LIBS})
-  endif()
   SET(ARROW_STATIC_LINK_LIBS
-    orc
-    ${ARROW_STATIC_LINK_LIBS})
+    ${ARROW_STATIC_LINK_LIBS}
+    orc)
+  set_target_properties(orc
+    PROPERTIES INTERFACE_LINK_LIBRARIES
+    protobuf)
 endif()
 
 if (ARROW_STATIC_LINK_LIBS)
@@ -643,11 +655,8 @@ set(ARROW_BENCHMARK_LINK_LIBS
   gtest
   ${ARROW_STATIC_LINK_LIBS})
 
-set(ARROW_LINK_LIBS
-  ${ARROW_STATIC_LINK_LIBS}
-  ${ARROW_LINK_LIBS})
-
 set(ARROW_SHARED_PRIVATE_LINK_LIBS
+  ${ARROW_STATIC_LINK_LIBS}
   ${BOOST_SYSTEM_LIBRARY}
   ${BOOST_FILESYSTEM_LIBRARY}
   ${BOOST_REGEX_LIBRARY})
@@ -728,4 +737,8 @@ endif()
 
 if(ARROW_HIVESERVER2)
   add_subdirectory(src/arrow/dbi/hiveserver2)
+endif()
+
+if(ARROW_PARQUET)
+  add_subdirectory(src/parquet)
 endif()

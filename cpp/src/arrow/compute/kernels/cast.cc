@@ -193,6 +193,19 @@ struct is_integer_downcast<
         (sizeof(O_T) < sizeof(I_T))));
 };
 
+template <typename O, typename I, typename Enable = void>
+struct is_float_truncate {
+  static constexpr bool value = false;
+};
+
+template <typename O, typename I>
+struct is_float_truncate<
+    O, I,
+    typename std::enable_if<std::is_base_of<Integer, O>::value &&
+                            std::is_base_of<FloatingPoint, I>::value>::type> {
+  static constexpr bool value = true;
+};
+
 template <typename O, typename I>
 struct CastFunctor<O, I,
                    typename std::enable_if<std::is_same<BooleanType, O>::value &&
@@ -253,8 +266,53 @@ struct CastFunctor<O, I,
 };
 
 template <typename O, typename I>
+struct CastFunctor<O, I, typename std::enable_if<is_float_truncate<O, I>::value>::type> {
+  void operator()(FunctionContext* ctx, const CastOptions& options,
+                  const ArrayData& input, ArrayData* output) {
+    using in_type = typename I::c_type;
+    using out_type = typename O::c_type;
+
+    auto in_offset = input.offset;
+    const in_type* in_data = GetValues<in_type>(input, 1);
+    auto out_data = GetMutableValues<out_type>(output, 1);
+
+    if (options.allow_float_truncate) {
+      // unsafe cast
+      for (int64_t i = 0; i < input.length; ++i) {
+        *out_data++ = static_cast<out_type>(*in_data++);
+      }
+    } else {
+      // safe cast
+      if (input.null_count != 0) {
+        internal::BitmapReader is_valid_reader(input.buffers[0]->data(), in_offset,
+                                               input.length);
+        for (int64_t i = 0; i < input.length; ++i) {
+          auto out_value = static_cast<out_type>(*in_data);
+          if (ARROW_PREDICT_FALSE(out_value != *in_data)) {
+            ctx->SetStatus(Status::Invalid("Floating point value truncated"));
+          }
+          *out_data++ = out_value;
+          in_data++;
+          is_valid_reader.Next();
+        }
+      } else {
+        for (int64_t i = 0; i < input.length; ++i) {
+          auto out_value = static_cast<out_type>(*in_data);
+          if (ARROW_PREDICT_FALSE(out_value != *in_data)) {
+            ctx->SetStatus(Status::Invalid("Floating point value truncated"));
+          }
+          *out_data++ = out_value;
+          in_data++;
+        }
+      }
+    }
+  }
+};
+
+template <typename O, typename I>
 struct CastFunctor<O, I,
                    typename std::enable_if<is_numeric_cast<O, I>::value &&
+                                           !is_float_truncate<O, I>::value &&
                                            !is_integer_downcast<O, I>::value>::type> {
   void operator()(FunctionContext* ctx, const CastOptions& options,
                   const ArrayData& input, ArrayData* output) {

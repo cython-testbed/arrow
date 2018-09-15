@@ -1,5 +1,3 @@
-#!/bin/sh
-
 # Licensed to the Apache Software Foundation (ASF) under one
 # or more contributor license agreements.  See the NOTICE file
 # distributed with this work for additional information
@@ -17,23 +15,10 @@
 # specific language governing permissions and limitations
 # under the License.
 
-set -e
-set -x
+# flake8: noqa
 
-export PARQUET_BUILD_TOOLCHAIN=$PREFIX
-
-mkdir build-dir
-cd build-dir
-
-cmake \
-    -DCMAKE_BUILD_TYPE=release \
-    -DCMAKE_INSTALL_PREFIX=$PREFIX \
-    -DCMAKE_INSTALL_LIBDIR=$PREFIX/lib \
-    -DPARQUET_BOOST_USE_SHARED=ON \
-    -DPARQUET_BUILD_BENCHMARKS=OFF \
-    -DPARQUET_BUILD_EXECUTABLES=OFF \
-    -DPARQUET_BUILD_TESTS=OFF \
-    ..
-
-make -j${CPU_COUNT}
-make install
+from pyarrow._cuda import (Context, IpcMemHandle, CudaBuffer,
+                           HostBuffer, BufferReader, BufferWriter,
+                           new_host_buffer,
+                           serialize_record_batch, read_message,
+                           read_record_batch)
