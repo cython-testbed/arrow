@@ -96,6 +96,9 @@ cdef class NativeFile:
         return False
 
     def fileno(self):
+        """
+        NOT IMPLEMENTED
+        """
         raise UnsupportedOperation()
 
     def close(self):
@@ -204,11 +207,16 @@ cdef class NativeFile:
         """
         Write byte from any object implementing buffer protocol (bytes,
         bytearray, ndarray, pyarrow.Buffer)
+
+        Parameters
+        ----------
+        data : bytes-like object or exporter of buffer protocol
+
+        Returns
+        -------
+        nbytes : number of bytes written
         """
         self._assert_writable()
-
-        if isinstance(data, six.string_types):
-            data = tobytes(data)
 
         cdef Buffer arrow_buffer = py_buffer(data)
 
@@ -216,6 +224,7 @@ cdef class NativeFile:
         cdef int64_t bufsize = len(arrow_buffer)
         with nogil:
             check_status(self.wr_file.get().Write(buf, bufsize))
+        return bufsize
 
     def read(self, nbytes=None):
         """
@@ -295,7 +304,7 @@ cdef class NativeFile:
         return bytes_read
 
     def readline(self, size=None):
-        """Read and return a line of bytes from the file.
+        """NOT IMPLEMENTED. Read and return a line of bytes from the file.
 
         If size is specified, read at most size bytes.
 
@@ -305,8 +314,7 @@ cdef class NativeFile:
         raise UnsupportedOperation()
 
     def readlines(self, hint=None):
-        """
-        Read lines of the file
+        """NOT IMPLEMENTED. Read lines of the file
 
         Parameters
         -----------
@@ -344,6 +352,9 @@ cdef class NativeFile:
         return pyarrow_wrap_buffer(output)
 
     def truncate(self):
+        """
+        NOT IMPLEMENTED
+        """
         raise UnsupportedOperation()
 
     def writelines(self, lines):
@@ -821,6 +832,13 @@ cdef class Buffer:
             self.buffer.get().size())
 
     def __getbuffer__(self, cp.Py_buffer* buffer, int flags):
+        if self.buffer.get().is_mutable():
+            buffer.readonly = 0
+        else:
+            if flags & cp.PyBUF_WRITABLE:
+                raise BufferError("Writable buffer requested but Arrow "
+                                  "buffer was not mutable")
+            buffer.readonly = 1
         buffer.buf = <char *>self.buffer.get().data()
         buffer.format = 'b'
         buffer.internal = NULL
@@ -828,10 +846,6 @@ cdef class Buffer:
         buffer.len = self.size
         buffer.ndim = 1
         buffer.obj = self
-        if self.buffer.get().is_mutable():
-            buffer.readonly = 0
-        else:
-            buffer.readonly = 1
         buffer.shape = self.shape
         buffer.strides = self.strides
         buffer.suboffsets = NULL

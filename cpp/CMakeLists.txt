@@ -256,6 +256,10 @@ Pass multiple labels by dividing with semicolons")
     "If off, 'quiet' flags will be passed to linting tools"
     OFF)
 
+  option(ARROW_USE_GLOG
+    "Build libraries with glog support for pluggable logging"
+    ON)
+
   if (MSVC)
     option(ARROW_USE_CLCACHE
       "Use clcache if available"
@@ -302,6 +306,8 @@ endif()
 if (MSVC)
   # ORC doesn't build on windows
   set(ARROW_ORC OFF)
+  # Plasma using glog is not fully tested on windows.
+  set(ARROW_USE_GLOG OFF)
 endif()
 
 if(ARROW_ORC)
@@ -640,9 +646,11 @@ if (ARROW_ORC)
   SET(ARROW_STATIC_LINK_LIBS
     ${ARROW_STATIC_LINK_LIBS}
     orc)
-  set_target_properties(orc
-    PROPERTIES INTERFACE_LINK_LIBRARIES
-    protobuf)
+endif()
+
+if (ARROW_USE_GLOG)
+  #add_definitions(-DARROW_USE_GLOG)
+  SET(ARROW_STATIC_LINK_LIBS glog_static ${ARROW_STATIC_LINK_LIBS})
 endif()
 
 if (ARROW_STATIC_LINK_LIBS)
@@ -690,7 +698,11 @@ if (ARROW_JEMALLOC)
   add_definitions(-DARROW_JEMALLOC)
   add_definitions(-DARROW_JEMALLOC_INCLUDE_DIR=${JEMALLOC_INCLUDE_DIR})
 
-  if (CMAKE_COMPILER_IS_GNUCXX AND PTHREAD_LIBRARY)
+  # If using gcc or clang on Linux, we need to link pthread for older Linuxes,
+  # including distros as new as Ubuntu 14.04
+  if ((CMAKE_COMPILER_IS_GNUCXX OR
+        (NOT APPLE AND CMAKE_CXX_COMPILER_ID MATCHES "Clang"))
+      AND PTHREAD_LIBRARY)
     set(ARROW_JEMALLOC_LINK_LIBS
       jemalloc_static
       # For glibc <2.17 we need to link to librt.
