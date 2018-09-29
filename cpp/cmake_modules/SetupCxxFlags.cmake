@@ -95,7 +95,7 @@ if ("${UPPERCASE_BUILD_WARNING_LEVEL}" STREQUAL "CHECKIN")
   elseif ("${COMPILER_FAMILY}" STREQUAL "clang")
     set(CXX_COMMON_FLAGS "${CXX_COMMON_FLAGS} -Weverything -Wno-c++98-compat \
 -Wno-c++98-compat-pedantic -Wno-deprecated -Wno-weak-vtables -Wno-padded \
--Wno-comma -Wno-unused-parameter -Wno-unused-template -Wno-undef \
+-Wno-comma -Wno-unused-macros -Wno-unused-parameter -Wno-unused-template -Wno-undef \
 -Wno-shadow -Wno-switch-enum -Wno-exit-time-destructors \
 -Wno-global-constructors -Wno-weak-template-vtables -Wno-undefined-reinterpret-cast \
 -Wno-implicit-fallthrough -Wno-unreachable-code-return \
@@ -178,7 +178,8 @@ if ("${COMPILER_FAMILY}" STREQUAL "msvc")
   set(CXX_COMMON_FLAGS "${CXX_COMMON_FLAGS} /wd4800")
 endif()
 
-if ("${COMPILER_FAMILY}" STREQUAL "gcc")
+if ("${COMPILER_FAMILY}" STREQUAL "gcc" AND
+    "${COMPILER_VERSION}" VERSION_GREATER "6.0")
   # Without this, gcc >= 7 warns related to changes in C++17
   set(CXX_ONLY_FLAGS "${CXX_ONLY_FLAGS} -Wno-noexcept-type")
 endif()

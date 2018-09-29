@@ -289,8 +289,21 @@ Pass multiple labels by dividing with semicolons")
 Always OFF if building binaries"
     OFF)
 
+  option(PARQUET_BUILD_EXECUTABLES
+    "Build the Parquet executable CLI tools"
+    OFF)
+
+  option(PARQUET_BUILD_EXAMPLES
+    "Build the Parquet examples"
+    OFF)
+
   set(PARQUET_ARROW_LINKAGE "shared" CACHE STRING
     "How to link Arrow libraries with libparquet.so. static|shared (default shared)")
+
+  # Gandiva related build options
+  option(ARROW_GANDIVA
+    "Build the Gandiva libraries"
+    OFF)
 
 endif()
 
@@ -531,6 +544,7 @@ if (UNIX)
             (item MATCHES "config.h") OR
             (item MATCHES "util/variant") OR
             (item MATCHES "zmalloc.h") OR
+            (item MATCHES "gandiva/precompiled/date.h") OR
             (item MATCHES "ae.h")))
       LIST(APPEND FILTERED_LINT_FILES ${item})
     ENDIF()
@@ -607,7 +621,7 @@ endif(UNIX)
 set(ARROW_LINK_LIBS)
 
 # Libraries to link statically with libarrow.so
-set(ARROW_STATIC_LINK_LIBS)
+set(ARROW_STATIC_LINK_LIBS double-conversion)
 
 if (ARROW_WITH_BROTLI)
   SET(ARROW_STATIC_LINK_LIBS
@@ -686,6 +700,7 @@ else ()
   set(ARROW_MIN_TEST_LIBS
     arrow_shared
     ${ARROW_LINK_LIBS}
+    double-conversion
     ${BOOST_SYSTEM_LIBRARY}
     ${BOOST_FILESYSTEM_LIBRARY}
     ${BOOST_REGEX_LIBRARY}
@@ -764,4 +779,10 @@ endif()
 
 if(ARROW_PARQUET)
   add_subdirectory(src/parquet)
+  add_subdirectory(tools/parquet)
+  add_subdirectory(examples/parquet/low-level-api)
+endif()
+
+if(ARROW_GANDIVA)
+  add_subdirectory(src/gandiva)
 endif()
