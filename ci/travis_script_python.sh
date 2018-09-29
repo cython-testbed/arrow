@@ -137,7 +137,7 @@ export PYARROW_WITH_PARQUET=1
 export PYARROW_WITH_PLASMA=1
 export PYARROW_WITH_ORC=1
 
-pip install --install-option="--no-cython-compile" https://github.com/cython/cython/archive/b6509bf791bfe44abbbaa957ae530e5910815dfd.zip
+pip install --install-option="--no-cython-compile" https://github.com/cython/cython/archive/c9eda12b4806fba3931f7b791be7a672c92d9ca0.zip
 
 python setup.py develop
 
