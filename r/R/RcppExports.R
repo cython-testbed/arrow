@@ -69,6 +69,14 @@ Array__Mask <- function(array) {
     .Call(`_arrow_Array__Mask`, array)
 }
 
+DictionaryArray__indices <- function(array) {
+    .Call(`_arrow_DictionaryArray__indices`, array)
+}
+
+DictionaryArray__dictionary <- function(array) {
+    .Call(`_arrow_DictionaryArray__dictionary`, array)
+}
+
 ArrayData__get_type <- function(x) {
     .Call(`_arrow_ArrayData__get_type`, x)
 }
@@ -83,6 +91,26 @@ ArrayData__get_null_count <- function(x) {
 
 ArrayData__get_offset <- function(x) {
     .Call(`_arrow_ArrayData__get_offset`, x)
+}
+
+Buffer__is_mutable <- function(buffer) {
+    .Call(`_arrow_Buffer__is_mutable`, buffer)
+}
+
+Buffer__ZeroPadding <- function(buffer) {
+    invisible(.Call(`_arrow_Buffer__ZeroPadding`, buffer))
+}
+
+Buffer__capacity <- function(buffer) {
+    .Call(`_arrow_Buffer__capacity`, buffer)
+}
+
+Buffer__size <- function(buffer) {
+    .Call(`_arrow_Buffer__size`, buffer)
+}
+
+r___RBuffer__initialize <- function(x) {
+    .Call(`_arrow_r___RBuffer__initialize`, x)
 }
 
 ChunkedArray__length <- function(chunked_array) {
@@ -305,6 +333,26 @@ Object__pointer_address <- function(obj) {
     .Call(`_arrow_Object__pointer_address`, obj)
 }
 
+DictionaryType__initialize <- function(type, array, ordered) {
+    .Call(`_arrow_DictionaryType__initialize`, type, array, ordered)
+}
+
+DictionaryType__index_type <- function(type) {
+    .Call(`_arrow_DictionaryType__index_type`, type)
+}
+
+DictionaryType__name <- function(type) {
+    .Call(`_arrow_DictionaryType__name`, type)
+}
+
+DictionaryType__dictionary <- function(type) {
+    .Call(`_arrow_DictionaryType__dictionary`, type)
+}
+
+DictionaryType__ordered <- function(type) {
+    .Call(`_arrow_DictionaryType__ordered`, type)
+}
+
 Field__initialize <- function(name, type, nullable = TRUE) {
     .Call(`_arrow_Field__initialize`, name, type, nullable)
 }
@@ -319,6 +367,50 @@ Field__name <- function(type) {
 
 Field__nullable <- function(type) {
     .Call(`_arrow_Field__nullable`, type)
+}
+
+io___Readable__Read <- function(x, nbytes) {
+    .Call(`_arrow_io___Readable__Read`, x, nbytes)
+}
+
+io___InputStream__Close <- function(x) {
+    invisible(.Call(`_arrow_io___InputStream__Close`, x))
+}
+
+io___RandomAccessFile__GetSize <- function(x) {
+    .Call(`_arrow_io___RandomAccessFile__GetSize`, x)
+}
+
+io___RandomAccessFile__supports_zero_copy <- function(x) {
+    .Call(`_arrow_io___RandomAccessFile__supports_zero_copy`, x)
+}
+
+io___RandomAccessFile__Seek <- function(x, position) {
+    invisible(.Call(`_arrow_io___RandomAccessFile__Seek`, x, position))
+}
+
+io___RandomAccessFile__Tell <- function(x) {
+    .Call(`_arrow_io___RandomAccessFile__Tell`, x)
+}
+
+io___MemoryMappedFile__Create <- function(path, size) {
+    .Call(`_arrow_io___MemoryMappedFile__Create`, path, size)
+}
+
+io___MemoryMappedFile__Open <- function(path, mode) {
+    .Call(`_arrow_io___MemoryMappedFile__Open`, path, mode)
+}
+
+io___MemoryMappedFile__Resize <- function(x, size) {
+    invisible(.Call(`_arrow_io___MemoryMappedFile__Resize`, x, size))
+}
+
+io___ReadableFile__Open <- function(path) {
+    .Call(`_arrow_io___ReadableFile__Open`, path)
+}
+
+io___BufferReader__initialize <- function(buffer) {
+    .Call(`_arrow_io___BufferReader__initialize`, buffer)
 }
 
 MemoryPool__default <- function() {
@@ -353,12 +445,20 @@ RecordBatch__to_dataframe <- function(batch) {
     .Call(`_arrow_RecordBatch__to_dataframe`, batch)
 }
 
-read_record_batch_ <- function(path) {
-    .Call(`_arrow_read_record_batch_`, path)
+read_record_batch_RandomAccessFile <- function(stream) {
+    .Call(`_arrow_read_record_batch_RandomAccessFile`, stream)
+}
+
+read_record_batch_BufferReader <- function(stream) {
+    .Call(`_arrow_read_record_batch_BufferReader`, stream)
 }
 
 RecordBatch__to_file <- function(batch, path) {
     .Call(`_arrow_RecordBatch__to_file`, batch, path)
+}
+
+RecordBatch__to_stream <- function(batch) {
+    .Call(`_arrow_RecordBatch__to_stream`, batch)
 }
 
 RecordBatch__from_dataframe <- function(tbl) {
@@ -409,8 +509,16 @@ Table__to_file <- function(table, path) {
     .Call(`_arrow_Table__to_file`, table, path)
 }
 
-read_table_ <- function(path) {
-    .Call(`_arrow_read_table_`, path)
+Table__to_stream <- function(table) {
+    .Call(`_arrow_Table__to_stream`, table)
+}
+
+read_table_RandomAccessFile <- function(stream) {
+    .Call(`_arrow_read_table_RandomAccessFile`, stream)
+}
+
+read_table_BufferReader <- function(stream) {
+    .Call(`_arrow_read_table_BufferReader`, stream)
 }
 
 Table__to_dataframe <- function(table) {

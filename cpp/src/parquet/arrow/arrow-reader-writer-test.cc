@@ -1391,6 +1391,16 @@ TEST(TestArrowReadWrite, CoerceTimestampsLosePrecision) {
   ASSERT_RAISES(Invalid, WriteTable(*t4, ::arrow::default_memory_pool(), sink, 10,
                                     default_writer_properties(), coerce_millis));
 
+  // OK to lose precision if we explicitly allow it
+  auto allow_truncation = (ArrowWriterProperties::Builder()
+                               .coerce_timestamps(TimeUnit::MILLI)
+                               ->allow_truncated_timestamps()
+                               ->build());
+  ASSERT_OK_NO_THROW(WriteTable(*t3, ::arrow::default_memory_pool(), sink, 10,
+                                default_writer_properties(), allow_truncation));
+  ASSERT_OK_NO_THROW(WriteTable(*t4, ::arrow::default_memory_pool(), sink, 10,
+                                default_writer_properties(), allow_truncation));
+
   // OK to write micros to micros
   auto coerce_micros =
       (ArrowWriterProperties::Builder().coerce_timestamps(TimeUnit::MICRO)->build());
@@ -2316,11 +2326,11 @@ TEST(TestArrowReaderAdHoc, Int96BadMemoryAccess) {
   ASSERT_OK_NO_THROW(arrow_reader->ReadTable(&table));
 }
 
-class TestArrowReaderAdHocSpark
+class TestArrowReaderAdHocSparkAndHvr
     : public ::testing::TestWithParam<
           std::tuple<std::string, std::shared_ptr<::DataType>>> {};
 
-TEST_P(TestArrowReaderAdHocSpark, ReadDecimals) {
+TEST_P(TestArrowReaderAdHocSparkAndHvr, ReadDecimals) {
   std::string path(test::get_data_dir());
 
   std::string filename;
@@ -2364,12 +2374,13 @@ TEST_P(TestArrowReaderAdHocSpark, ReadDecimals) {
 }
 
 INSTANTIATE_TEST_CASE_P(
-    ReadDecimals, TestArrowReaderAdHocSpark,
+    ReadDecimals, TestArrowReaderAdHocSparkAndHvr,
     ::testing::Values(
         std::make_tuple("int32_decimal.parquet", ::arrow::decimal(4, 2)),
         std::make_tuple("int64_decimal.parquet", ::arrow::decimal(10, 2)),
         std::make_tuple("fixed_length_decimal.parquet", ::arrow::decimal(25, 2)),
-        std::make_tuple("fixed_length_decimal_legacy.parquet", ::arrow::decimal(13, 2))));
+        std::make_tuple("fixed_length_decimal_legacy.parquet", ::arrow::decimal(13, 2)),
+        std::make_tuple("byte_array_decimal.parquet", ::arrow::decimal(4, 2))));
 
 }  // namespace arrow
 

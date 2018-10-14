@@ -18,7 +18,9 @@
 
 package org.apache.arrow.gandiva.evaluator;
 
-import io.netty.buffer.ArrowBuf;
+import java.util.ArrayList;
+import java.util.List;
+
 import org.apache.arrow.gandiva.exceptions.EvaluatorClosedException;
 import org.apache.arrow.gandiva.exceptions.GandivaException;
 import org.apache.arrow.gandiva.exceptions.UnsupportedTypeException;
@@ -31,7 +33,7 @@ import org.apache.arrow.vector.ipc.message.ArrowBuffer;
 import org.apache.arrow.vector.ipc.message.ArrowRecordBatch;
 import org.apache.arrow.vector.types.pojo.Schema;
 
-import java.util.List;
+import io.netty.buffer.ArrowBuf;
 
 /**
  * This class provides a mechanism to evaluate a set of expressions against a RecordBatch.
@@ -110,8 +112,32 @@ public class Projector {
    */
   public void evaluate(ArrowRecordBatch recordBatch, List<ValueVector> outColumns)
           throws GandivaException {
-    //TODO: remove later, only for diagnostic.
-    logger.info("Evaluate called for module with id {}", moduleId);
+    evaluate(recordBatch.getLength(), recordBatch.getBuffers(), recordBatch.getBuffersLayout(),
+        outColumns);
+  }
+
+  /**
+   * Invoke this function to evaluate a set of expressions against a set of arrow buffers.
+   * (this is an optimised version that skips taking references).
+   *
+   * @param numRows number of rows.
+   * @param buffers List of input arrow buffers
+   * @param outColumns Result of applying the project on the data
+   */
+  public void evaluate(int numRows, List<ArrowBuf> buffers,
+                       List<ValueVector> outColumns) throws GandivaException {
+    List<ArrowBuffer> buffersLayout = new ArrayList<>();
+    long offset = 0;
+    for (ArrowBuf arrowBuf : buffers) {
+      long size = arrowBuf.readableBytes();
+      buffersLayout.add(new ArrowBuffer(offset, size));
+      offset += size;
+    }
+    evaluate(numRows, buffers, buffersLayout, outColumns);
+  }
+
+  private void evaluate(int numRows, List<ArrowBuf> buffers, List<ArrowBuffer> buffersLayout,
+                       List<ValueVector> outColumns) throws GandivaException {
     if (this.closed) {
       throw new EvaluatorClosedException();
     }
@@ -120,9 +146,6 @@ public class Projector {
       logger.info("Expected " + numExprs + " columns, got " + outColumns.size());
       throw new GandivaException("Incorrect number of columns for the output vector");
     }
-
-    List<ArrowBuf> buffers = recordBatch.getBuffers();
-    List<ArrowBuffer> buffersLayout = recordBatch.getBuffersLayout();
 
     long[] bufAddrs = new long[buffers.size()];
     long[] bufSizes = new long[buffers.size()];
@@ -137,7 +160,6 @@ public class Projector {
       bufSizes[idx++] = bufLayout.getSize();
     }
 
-    int numRows = recordBatch.getLength();
     long[] outAddrs = new long[2 * outColumns.size()];
     long[] outSizes = new long[2 * outColumns.size()];
     idx = 0;
@@ -163,7 +185,6 @@ public class Projector {
    * Closes the LLVM module representing this evaluator.
    */
   public void close() throws GandivaException {
-    logger.info("Close called for module with id {}", moduleId);
     if (this.closed) {
       return;
     }

@@ -29,11 +29,17 @@
 # LD_LIBRARY_PATH
 
 case $# in
-  2) VERSION="$1"
-     RC_NUMBER="$2"
+  3) ARTIFACT="$1"
+     VERSION="$2"
+     RC_NUMBER="$3"
+     case $ARTIFACT in
+       source|binaries) ;;
+       *) echo "Invalid argument: '${ARTIFACT}', valid options are 'source' or 'binaries'"
+          exit 1
+          ;;
+     esac
      ;;
-
-  *) echo "Usage: $0 X.Y.Z RC_NUMBER"
+  *) echo "Usage: $0 source|binaries X.Y.Z RC_NUMBER"
      exit 1
      ;;
 esac
@@ -135,7 +141,7 @@ setup_miniconda() {
   bash miniconda.sh -b -p $MINICONDA
   rm -f miniconda.sh
 
-  export PATH=$MINICONDA/bin:$PATH
+  . $MINICONDA/etc/profile.d/conda.sh
 
   conda create -n arrow-test -y -q python=3.6 \
         nomkl \
@@ -171,6 +177,9 @@ test_and_install_cpp() {
   make -j$NPROC
   make install
 
+  git clone https://github.com/apache/parquet-testing.git
+  export PARQUET_TEST_DATA=$PWD/parquet-testing/data
+
   ctest -VV -L unittest
   popd
 }
@@ -202,6 +211,8 @@ test_glib() {
     gem install bundler
   fi
 
+  # Workaround for 0.11.0. 0.11.0 doesn't include c_glib/Gemfile.
+  wget https://raw.githubusercontent.com/apache/arrow/master/c_glib/Gemfile
   bundle install --path vendor/bundle
   bundle exec ruby test/run-test.rb
 
@@ -309,28 +320,30 @@ if [ "$(uname)" == "Darwin" ]; then
 else
   NPROC=$(nproc)
 fi
-VERSION=$1
-RC_NUMBER=$2
-
-TARBALL=apache-arrow-$1.tar.gz
 
 import_gpg_keys
-verify_binary_artifacts
 
-DIST_NAME="apache-arrow-${VERSION}"
-fetch_archive $DIST_NAME
-tar xvzf ${DIST_NAME}.tar.gz
-cd ${DIST_NAME}
+if [ "$ARTIFACT" == "source" ]; then
+  TARBALL=apache-arrow-$1.tar.gz
+  DIST_NAME="apache-arrow-${VERSION}"
 
-test_package_java
-setup_miniconda
-test_and_install_cpp
-test_python
-test_glib
-test_ruby
-test_js
-test_integration
-test_rust
+  fetch_archive $DIST_NAME
+  tar xvzf ${DIST_NAME}.tar.gz
+  cd ${DIST_NAME}
+
+  test_package_java
+  setup_miniconda
+  test_and_install_cpp
+  test_python
+  test_glib
+  test_ruby
+  test_js
+  test_integration
+  test_rust
+else
+  # takes longer on slow network
+  verify_binary_artifacts
+fi
 
 echo 'Release candidate looks good!'
 exit 0

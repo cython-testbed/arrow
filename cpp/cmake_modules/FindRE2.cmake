@@ -22,48 +22,73 @@
 # This module defines
 #  RE2_INCLUDE_DIR, directory containing headers
 #  RE2_STATIC_LIB, path to libre2.a
-#  re2 imported static library
+#  RE2_SHARED_LIB, path to libre2.so
 #  RE2_FOUND, whether re2 has been found
 
-set(RE2_SEARCH_HEADER_PATHS ${RE2_HOME}/include)
-
-set(RE2_SEARCH_LIB_PATHS ${RE2_HOME}/lib)
+if( NOT "${RE2_HOME}" STREQUAL "")
+    file (TO_CMAKE_PATH "${RE2_HOME}" _re2_path)
+endif()
+message (STATUS "RE2_HOME: ${RE2_HOME}")
 
 find_path(RE2_INCLUDE_DIR re2/re2.h
-  PATHS ${RE2_SEARCH_HEADER_PATHS}
-        NO_DEFAULT_PATH
+  HINTS ${_re2_path}
+  NO_DEFAULT_PATH
+  PATH_SUFFIXES "include"
   DOC  "Google's re2 regex header path"
 )
 
-find_library(RE2_LIBS NAMES re2
-  PATHS ${RE2_SEARCH_LIB_PATHS}
-        NO_DEFAULT_PATH
-  DOC   "Google's re2 regex library"
-)
+set (lib_dirs "lib")
+if (EXISTS "${_re2_path}/lib64")
+  set (lib_dirs "lib64" ${lib_dirs})
+endif ()
+if (EXISTS "${_re2_path}/lib/${CMAKE_LIBRARY_ARCHITECTURE}")
+  set (lib_dirs "lib/${CMAKE_LIBRARY_ARCHITECTURE}" ${lib_dirs})
+endif ()
 
 find_library(RE2_STATIC_LIB NAMES libre2${CMAKE_STATIC_LIBRARY_SUFFIX}
-  PATHS ${RE2_SEARCH_LIB_PATHS}
+  PATHS ${_re2_path}
         NO_DEFAULT_PATH
+  PATH_SUFFIXES ${lib_dirs}
+  DOC   "Google's re2 regex static library"
+)
+
+find_library(RE2_SHARED_LIB NAMES libre2${CMAKE_SHARED_LIBRARY_SUFFIX}
+  PATHS ${_re2_path}
+        NO_DEFAULT_PATH
+  PATH_SUFFIXES ${lib_dirs}
   DOC   "Google's re2 regex static library"
 )
 
 message(STATUS ${RE2_INCLUDE_DIR})
 
-if (NOT RE2_INCLUDE_DIR OR NOT RE2_LIBS OR
-    NOT RE2_STATIC_LIB)
+if (ARROW_RE2_LINKAGE STREQUAL "static" AND (NOT RE2_STATIC_LIB))
+  set(RE2_LIB_NOT_FOUND TRUE)
+elseif(ARROW_RE2_LINKAGE STREQUAL "shared" AND (NOT RE2_SHARED_LIB))
+  set(RE2_LIB_NOT_FOUND TRUE)
+endif()
+
+if (NOT RE2_INCLUDE_DIR OR RE2_LIB_NOT_FOUND)
   set(RE2_FOUND FALSE)
-  message(FATAL_ERROR "Re2 includes and libraries NOT found. "
-    "Looked for headers in ${RE2_SEARCH_HEADER_PATHS}, "
-    "and for libs in ${RE2_SEARCH_LIB_PATHS}")
+  if (_re2_path)
+    set (RE2_ERR_MSG "Could not find re2. Looked in ${_re2_path}.")
+  else ()
+    set (RE2_ERR_MSG "Could not find re2 in system search paths.")
+  endif()
+
+  if (RE2_FIND_REQUIRED)
+    message(FATAL_ERROR "${RE2_ERR_MSG})")
+  else ()
+    message (STATUS "${RE2_ERR_MSG}")
+  endif ()
 else()
     set(RE2_FOUND TRUE)
-    add_library(re2 STATIC IMPORTED)
-    set_target_properties(re2 PROPERTIES IMPORTED_LOCATION "${RE2_STATIC_LIB}")
+    message(STATUS "RE2 headers : ${RE2_INCLUDE_DIR}")
+    message(STATUS "RE2 static library : ${RE2_STATIC_LIB}")
+    message(STATUS "RE2 shared library : ${RE2_SHARED_LIB}")
 endif()
 
 mark_as_advanced(
   RE2_INCLUDE_DIR
-  RE2_LIBS
+  RE2_SHARED_LIB
   RE2_STATIC_LIB
-  re2
 )

@@ -375,8 +375,6 @@ cdef class Field:
         Parameters
         ----------
         other : pyarrow.Field
-        check_metadata : boolean, default True
-            Key/value metadata must be equal too
 
         Returns
         -------
@@ -1474,3 +1472,15 @@ def from_numpy_dtype(object dtype):
         check_status(NumPyDtypeToArrow(dtype, &c_type))
 
     return pyarrow_wrap_data_type(c_type)
+
+
+def is_boolean_value(object obj):
+    return IsPyBool(obj)
+
+
+def is_integer_value(object obj):
+    return IsPyInt(obj)
+
+
+def is_float_value(object obj):
+    return IsPyFloat(obj)

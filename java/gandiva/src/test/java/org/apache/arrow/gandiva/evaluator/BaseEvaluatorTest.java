@@ -18,8 +18,13 @@
 
 package org.apache.arrow.gandiva.evaluator;
 
-import io.netty.buffer.ArrowBuf;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Random;
+import java.util.concurrent.TimeUnit;
+
 import org.apache.arrow.gandiva.exceptions.GandivaException;
+import org.apache.arrow.gandiva.expression.Condition;
 import org.apache.arrow.gandiva.expression.ExpressionTree;
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.memory.RootAllocator;
@@ -34,16 +39,103 @@ import org.joda.time.Instant;
 import org.junit.After;
 import org.junit.Before;
 
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Random;
+import io.netty.buffer.ArrowBuf;
+
+interface BaseEvaluator {
+
+  void evaluate(ArrowRecordBatch recordBatch, BufferAllocator allocator) throws GandivaException;
+
+  long getElapsedMillis();
+}
+
+class ProjectEvaluator implements BaseEvaluator {
+
+  private Projector projector;
+  private DataAndVectorGenerator generator;
+  private int numExprs;
+  private int maxRowsInBatch;
+  private long elapsedTime = 0;
+  private List<ValueVector> outputVectors = new ArrayList<>();
+
+  public ProjectEvaluator(Projector projector,
+      DataAndVectorGenerator generator,
+      int numExprs,
+      int maxRowsInBatch) {
+    this.projector = projector;
+    this.generator = generator;
+    this.numExprs = numExprs;
+    this.maxRowsInBatch = maxRowsInBatch;
+  }
+
+  @Override
+  public void evaluate(ArrowRecordBatch recordBatch,
+      BufferAllocator allocator) throws GandivaException {
+    // set up output vectors
+    // for each expression, generate the output vector
+    for (int i = 0; i < numExprs; i++) {
+      ValueVector valueVector = generator.generateOutputVector(maxRowsInBatch);
+      outputVectors.add(valueVector);
+    }
+
+    try {
+      long start = System.nanoTime();
+      projector.evaluate(recordBatch, outputVectors);
+      long finish = System.nanoTime();
+      elapsedTime += (finish - start);
+    } finally {
+      for (ValueVector valueVector : outputVectors) {
+        valueVector.close();
+      }
+    }
+    outputVectors.clear();
+  }
+
+  @Override
+  public long getElapsedMillis() {
+    return TimeUnit.NANOSECONDS.toMillis(elapsedTime);
+  }
+}
+
+class FilterEvaluator implements BaseEvaluator {
+
+  private Filter filter;
+  private long elapsedTime = 0;
+
+  public FilterEvaluator(Filter filter) {
+    this.filter = filter;
+  }
+
+  @Override
+  public void evaluate(ArrowRecordBatch recordBatch,
+      BufferAllocator allocator) throws GandivaException {
+    ArrowBuf selectionBuffer = allocator.buffer(recordBatch.getLength() * 2);
+    SelectionVectorInt16 selectionVector = new SelectionVectorInt16(selectionBuffer);
+
+    try {
+      long start = System.nanoTime();
+      filter.evaluate(recordBatch, selectionVector);
+      long finish = System.nanoTime();
+      elapsedTime += (finish - start);
+    } finally {
+      selectionBuffer.close();
+    }
+  }
+
+  @Override
+  public long getElapsedMillis() {
+    return TimeUnit.NANOSECONDS.toMillis(elapsedTime);
+  }
+}
 
 interface DataAndVectorGenerator {
+
   public void writeData(ArrowBuf buffer);
+
   public ValueVector generateOutputVector(int numRowsInBatch);
 }
 
 class Int32DataAndVectorGenerator implements DataAndVectorGenerator {
+
   protected final BufferAllocator allocator;
   protected final Random rand;
 
@@ -66,6 +158,7 @@ class Int32DataAndVectorGenerator implements DataAndVectorGenerator {
 }
 
 class BoundedInt32DataAndVectorGenerator extends Int32DataAndVectorGenerator {
+
   private final int upperBound;
 
   BoundedInt32DataAndVectorGenerator(BufferAllocator allocator, int upperBound) {
@@ -80,10 +173,11 @@ class BoundedInt32DataAndVectorGenerator extends Int32DataAndVectorGenerator {
 }
 
 class BaseEvaluatorTest {
-  protected final static int THOUSAND = 1000;
-  protected final static int MILLION = THOUSAND * THOUSAND;
 
-  protected final static String EMPTY_SCHEMA_PATH = "";
+  protected static final int THOUSAND = 1000;
+  protected static final int MILLION = THOUSAND * THOUSAND;
+
+  protected static final String EMPTY_SCHEMA_PATH = "";
 
   protected BufferAllocator allocator;
   protected ArrowType boolType;
@@ -121,7 +215,7 @@ class BaseEvaluatorTest {
   ArrowBuf arrowBufWithAllValid(int size) {
     int bufLen = (size + 7) / 8;
     ArrowBuf buffer = allocator.buffer(bufLen);
-    for(int i = 0; i < bufLen; i++) {
+    for (int i = 0; i < bufLen; i++) {
       buffer.writeByte(255);
     }
 
@@ -155,7 +249,7 @@ class BaseEvaluatorTest {
 
   ArrowBuf stringToMillis(String[] dates) {
     ArrowBuf buffer = allocator.buffer(dates.length * 8);
-    for(int i = 0; i < dates.length; i++) {
+    for (int i = 0; i < dates.length; i++) {
       Instant instant = Instant.parse(dates[i]);
       buffer.writeLong(instant.getMillis());
     }
@@ -169,37 +263,32 @@ class BaseEvaluatorTest {
     // One in the allocator - release that explicitly
     List<ArrowBuf> buffers = recordBatch.getBuffers();
     recordBatch.close();
-    for(ArrowBuf buf : buffers) {
+    for (ArrowBuf buf : buffers) {
       buf.release();
     }
   }
 
   void releaseValueVectors(List<ValueVector> valueVectors) {
-    for(ValueVector valueVector : valueVectors) {
+    for (ValueVector valueVector : valueVectors) {
       valueVector.close();
     }
   }
 
   void generateData(DataAndVectorGenerator generator, int numRecords, ArrowBuf buffer) {
-    for(int i = 0; i < numRecords; i++) {
+    for (int i = 0; i < numRecords; i++) {
       generator.writeData(buffer);
     }
   }
 
-  private long generateDataAndEvaluate(DataAndVectorGenerator generator,
-                                       Projector evaluator,
-                                       int numFields, int numExprs,
-                                       int numRows, int maxRowsInBatch,
-                                       int inputFieldSize)
-    throws GandivaException, Exception {
+  private void generateDataAndEvaluate(DataAndVectorGenerator generator,
+      BaseEvaluator evaluator,
+      int numFields,
+      int numRows, int maxRowsInBatch,
+      int inputFieldSize)
+      throws GandivaException, Exception {
     int numRemaining = numRows;
     List<ArrowBuf> inputData = new ArrayList<ArrowBuf>();
     List<ArrowFieldNode> fieldNodes = new ArrayList<ArrowFieldNode>();
-    List<ValueVector> outputVectors = new ArrayList<ValueVector>();
-
-    long start;
-    long finish;
-    long elapsedTime = 0;
 
     // set the bitmap
     while (numRemaining > 0) {
@@ -222,46 +311,50 @@ class BaseEvaluatorTest {
       // create record batch
       ArrowRecordBatch recordBatch = new ArrowRecordBatch(numRowsInBatch, fieldNodes, inputData);
 
-      // set up output vectors
-      // for each expression, generate the output vector
-      for (int i = 0; i < numExprs; i++) {
-        ValueVector valueVector = generator.generateOutputVector(maxRowsInBatch);
-        outputVectors.add(valueVector);
-      }
+      evaluator.evaluate(recordBatch, allocator);
 
-      start = System.nanoTime();
-      evaluator.evaluate(recordBatch, outputVectors);
-      finish = System.nanoTime();
-
-      elapsedTime += (finish - start);
       // fix numRemaining
       numRemaining -= numRowsInBatch;
 
       // release refs
       releaseRecordBatch(recordBatch);
-      releaseValueVectors(outputVectors);
 
       inputData.clear();
       fieldNodes.clear();
-      outputVectors.clear();
     }
-
-    return (elapsedTime / MILLION);
   }
 
-  long timedEvaluate(DataAndVectorGenerator generator,
-                     Schema schema, List<ExpressionTree> exprs,
-                     int numRows, int maxRowsInBatch,
-                     int inputFieldSize)
-  throws GandivaException, Exception {
-    Projector eval = Projector.make(schema, exprs);
-
+  long timedProject(DataAndVectorGenerator generator,
+      Schema schema, List<ExpressionTree> exprs,
+      int numRows, int maxRowsInBatch,
+      int inputFieldSize)
+      throws GandivaException, Exception {
+    Projector projector = Projector.make(schema, exprs);
     try {
-      return generateDataAndEvaluate(generator, eval,
-              schema.getFields().size(), exprs.size(),
-              numRows, maxRowsInBatch, inputFieldSize);
+      ProjectEvaluator evaluator =
+          new ProjectEvaluator(projector, generator, exprs.size(), maxRowsInBatch);
+      generateDataAndEvaluate(generator, evaluator,
+          schema.getFields().size(), numRows, maxRowsInBatch, inputFieldSize);
+      return evaluator.getElapsedMillis();
     } finally {
-      eval.close();
+      projector.close();
+    }
+  }
+
+  long timedFilter(DataAndVectorGenerator generator,
+      Schema schema, Condition condition,
+      int numRows, int maxRowsInBatch,
+      int inputFieldSize)
+      throws GandivaException, Exception {
+
+    Filter filter = Filter.make(schema, condition);
+    try {
+      FilterEvaluator evaluator = new FilterEvaluator(filter);
+      generateDataAndEvaluate(generator, evaluator,
+          schema.getFields().size(), numRows, maxRowsInBatch, inputFieldSize);
+      return evaluator.getElapsedMillis();
+    } finally {
+      filter.close();
     }
   }
 }

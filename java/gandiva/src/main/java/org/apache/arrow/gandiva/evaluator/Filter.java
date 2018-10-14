@@ -18,7 +18,8 @@
 
 package org.apache.arrow.gandiva.evaluator;
 
-import io.netty.buffer.ArrowBuf;
+import java.util.ArrayList;
+import java.util.List;
 
 import org.apache.arrow.gandiva.exceptions.EvaluatorClosedException;
 import org.apache.arrow.gandiva.exceptions.GandivaException;
@@ -31,17 +32,16 @@ import org.apache.arrow.vector.types.pojo.Schema;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.List;
+import io.netty.buffer.ArrowBuf;
 
 /**
  * This class provides a mechanism to filter a RecordBatch by evaluating a condition expression.
- * Follow these steps to use this class:
- * 1) Use the static method make() to create an instance of this class that evaluates a
- * condition.
- * 2) Invoke the method evaluate() to evaluate the filter against a RecordBatch
- * 3) Invoke close() to release resources
+ * Follow these steps to use this class: 1) Use the static method make() to create an instance of
+ * this class that evaluates a condition. 2) Invoke the method evaluate() to evaluate the filter
+ * against a RecordBatch 3) Invoke close() to release resources
  */
 public class Filter {
+
   private static final Logger logger = LoggerFactory.getLogger(Filter.class);
 
   private final long moduleId;
@@ -55,12 +55,11 @@ public class Filter {
   }
 
   /**
-   * Invoke this function to generate LLVM code to evaluate the condition expression.
-   * Invoke Filter::Evaluate() against a RecordBatch to evaluate the filter on
-   * this record batch
+   * Invoke this function to generate LLVM code to evaluate the condition expression. Invoke
+   * Filter::Evaluate() against a RecordBatch to evaluate the filter on this record batch
    *
-   * @param schema    Table schema. The field names in the schema should match the fields used
-   *                  to create the TreeNodes
+   * @param schema Table schema. The field names in the schema should match the fields used to
+   * create the TreeNodes
    * @param condition condition to be evaluated against data
    * @return A native filter object that can be used to invoke on a RecordBatch
    */
@@ -69,13 +68,12 @@ public class Filter {
   }
 
   /**
-   * Invoke this function to generate LLVM code to evaluate the condition expression.
-   * Invoke Filter::Evaluate() against a RecordBatch to evaluate the filter on
-   * this record batch
+   * Invoke this function to generate LLVM code to evaluate the condition expression. Invoke
+   * Filter::Evaluate() against a RecordBatch to evaluate the filter on this record batch
    *
-   * @param schema          Table schema. The field names in the schema should match the fields used
-   *                        to create the TreeNodes
-   * @param condition       condition to be evaluated against data
+   * @param schema Table schema. The field names in the schema should match the fields used to
+   * create the TreeNodes
+   * @param condition condition to be evaluated against data
    * @param configurationId Custom configuration created through config builder.
    * @return A native evaluator object that can be used to invoke these projections on a RecordBatch
    */
@@ -92,28 +90,47 @@ public class Filter {
   }
 
   /**
-   * Invoke this function to evaluate a set of expressions against a recordBatch.
+   * Invoke this function to evaluate a filter against a recordBatch.
    *
    * @param recordBatch Record batch including the data
-   * @param selectionVector  Result of applying the filter on the data
+   * @param selectionVector Result of applying the filter on the data
    */
   public void evaluate(ArrowRecordBatch recordBatch, SelectionVector selectionVector)
       throws GandivaException {
+    evaluate(recordBatch.getLength(), recordBatch.getBuffers(), recordBatch.getBuffersLayout(),
+        selectionVector);
+  }
 
+  /**
+   * Invoke this function to evaluate filter against a set of arrow buffers. (this is an optimised
+   * version that skips taking references).
+   *
+   * @param numRows number of rows.
+   * @param buffers List of input arrow buffers
+   * @param selectionVector Result of applying the filter on the data
+   */
+  public void evaluate(int numRows, List<ArrowBuf> buffers,
+      SelectionVector selectionVector) throws GandivaException {
+    List<ArrowBuffer> buffersLayout = new ArrayList<>();
+    long offset = 0;
+    for (ArrowBuf arrowBuf : buffers) {
+      long size = arrowBuf.readableBytes();
+      buffersLayout.add(new ArrowBuffer(offset, size));
+      offset += size;
+    }
+    evaluate(numRows, buffers, buffersLayout, selectionVector);
+  }
+
+  private void evaluate(int numRows, List<ArrowBuf> buffers, List<ArrowBuffer> buffersLayout,
+      SelectionVector selectionVector) throws GandivaException {
     if (this.closed) {
       throw new EvaluatorClosedException();
     }
-    //TODO: remove later, only for diagnostic.
-    logger.info("Evaluate called for module with id {}", moduleId);
-    int numRows = recordBatch.getLength();
     if (selectionVector.getMaxRecords() < numRows) {
-      logger.error("selectionVector has capacity for " + numRows
-          + " rows, minimum required " + recordBatch.getLength());
+      logger.error("selectionVector has capacity for " + selectionVector.getMaxRecords() +
+          " rows, minimum required " + numRows);
       throw new GandivaException("SelectionVector too small");
     }
-
-    List<ArrowBuf> buffers = recordBatch.getBuffers();
-    List<ArrowBuffer> buffersLayout = recordBatch.getBuffersLayout();
 
     long[] bufAddrs = new long[buffers.size()];
     long[] bufSizes = new long[buffers.size()];
@@ -141,8 +158,6 @@ public class Filter {
    * Closes the LLVM module representing this filter.
    */
   public void close() throws GandivaException {
-    //TODO: remove later, only for diagnostic.
-    logger.info("Close called for module with id {}", moduleId);
     if (this.closed) {
       return;
     }

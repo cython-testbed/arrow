@@ -20,8 +20,6 @@ cmake_minimum_required(VERSION 3.11)
 
 project(gandiva)
 
-find_package(RE2 REQUIRED)
-
 include(GandivaBuildUtils)
 
 find_package(LLVM)
@@ -50,7 +48,10 @@ configure_file(bc_file_path.cc.in ${BC_FILE_PATH_CC})
 # helper files that are shared between libgandiva and libgandiva_helpers
 set(SHARED_HELPER_FILES
       like_holder.cc
-      regex_util.cc)
+      regex_util.cc
+      execution_context.cc
+      to_date_holder.cc
+      date_utils.cc)
 
 set(SRC_FILES annotator.cc
       bitmap_accumulator.cc
@@ -71,7 +72,10 @@ set(SRC_FILES annotator.cc
       ${SHARED_HELPER_FILES}
       ${BC_FILE_PATH_CC})
 
+# TODO(wesm): Replace this with ADD_ARROW_LIB which deals with objlib/no-objlib
+# (not supported on Windows), dependencies, etc.
 add_library(gandiva_obj_lib OBJECT ${SRC_FILES})
+add_dependencies(gandiva_obj_lib arrow_dependencies)
 
 # set PIC so that object library can be included in shared libs.
 set_target_properties(gandiva_obj_lib PROPERTIES POSITION_INDEPENDENT_CODE 1)
@@ -104,6 +108,8 @@ add_library(gandiva_helpers SHARED
   ${SHARED_HELPER_FILES}
   function_holder_stubs.cc)
 
+add_dependencies(gandiva_helpers arrow_dependencies)
+
 target_compile_definitions(gandiva_helpers
   PRIVATE -DGDV_HELPERS
 )
@@ -115,8 +121,12 @@ target_include_directories(gandiva_helpers
     ${ARROW_INCLUDE_DIR}
 )
 
-target_link_libraries(gandiva_helpers PRIVATE Boost::boost ${RE2_STATIC_LIB})
+target_link_libraries(gandiva_helpers PRIVATE Boost::boost re2)
+
+# hide all symbols that are not needed.
 if (NOT APPLE)
+  # apple linker does not support version scripts, not needed since we package from travis.
+  set_target_properties(gandiva_helpers PROPERTIES LINK_FLAGS "-Wl,--version-script=${CMAKE_SOURCE_DIR}/src/gandiva/symbols-helpers.map")
   target_link_libraries(gandiva_helpers LINK_PRIVATE -static-libstdc++ -static-libgcc)
 endif()
 
@@ -147,21 +157,29 @@ install(FILES
   DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
 )
 
+# pkg-config support
+configure_file(gandiva.pc.in
+  "${CMAKE_CURRENT_BINARY_DIR}/gandiva.pc"
+  @ONLY)
+install(
+  FILES "${CMAKE_CURRENT_BINARY_DIR}/gandiva.pc"
+  DESTINATION "${CMAKE_INSTALL_LIBDIR}/pkgconfig/")
+
 #args: label test-file src-files
-add_gandiva_unit_test(bitmap_accumulator_test.cc bitmap_accumulator.cc)
-add_gandiva_unit_test(engine_llvm_test.cc engine.cc llvm_types.cc configuration.cc ${BC_FILE_PATH_CC})
+add_gandiva_unit_test(bitmap_accumulator_test.cc bitmap_accumulator.cc execution_context.cc)
+add_gandiva_unit_test(engine_llvm_test.cc engine.cc llvm_types.cc configuration.cc execution_context.cc ${BC_FILE_PATH_CC})
 add_gandiva_unit_test(function_signature_test.cc function_signature.cc)
 add_gandiva_unit_test(function_registry_test.cc function_registry.cc function_signature.cc)
 add_gandiva_unit_test(llvm_types_test.cc llvm_types.cc)
-add_gandiva_unit_test(llvm_generator_test.cc llvm_generator.cc regex_util.cc engine.cc llvm_types.cc expr_decomposer.cc function_registry.cc annotator.cc bitmap_accumulator.cc configuration.cc  function_signature.cc like_holder.cc regex_util.cc ${BC_FILE_PATH_CC})
+add_gandiva_unit_test(llvm_generator_test.cc llvm_generator.cc regex_util.cc engine.cc llvm_types.cc expr_decomposer.cc function_registry.cc annotator.cc bitmap_accumulator.cc configuration.cc  function_signature.cc like_holder.cc to_date_holder.cc date_utils.cc regex_util.cc execution_context.cc ${BC_FILE_PATH_CC})
 add_gandiva_unit_test(annotator_test.cc annotator.cc function_signature.cc)
-add_gandiva_unit_test(tree_expr_test.cc tree_expr_builder.cc expr_decomposer.cc annotator.cc function_registry.cc function_signature.cc like_holder.cc regex_util.cc)
-add_gandiva_unit_test(expr_decomposer_test.cc expr_decomposer.cc tree_expr_builder.cc annotator.cc function_registry.cc function_signature.cc like_holder.cc regex_util.cc)
+add_gandiva_unit_test(tree_expr_test.cc tree_expr_builder.cc expr_decomposer.cc annotator.cc function_registry.cc function_signature.cc like_holder.cc regex_util.cc to_date_holder.cc date_utils.cc execution_context.cc)
+add_gandiva_unit_test(expr_decomposer_test.cc expr_decomposer.cc tree_expr_builder.cc annotator.cc function_registry.cc function_signature.cc like_holder.cc regex_util.cc to_date_holder.cc date_utils.cc execution_context.cc)
 add_gandiva_unit_test(status_test.cc)
 add_gandiva_unit_test(expression_registry_test.cc llvm_types.cc expression_registry.cc function_signature.cc function_registry.cc)
 add_gandiva_unit_test(selection_vector_test.cc selection_vector.cc)
 add_gandiva_unit_test(lru_cache_test.cc)
-add_gandiva_unit_test(like_holder_test.cc like_holder.cc regex_util.cc)
+add_gandiva_unit_test(to_date_holder_test.cc to_date_holder.cc date_utils.cc execution_context.cc)
 
 add_subdirectory(jni)
 add_subdirectory(precompiled)

@@ -55,14 +55,15 @@ extern "C" {
   }
 
 // Symmetric binary fns : left, right params and return type are same.
-#define BINARY_SYMMETRIC(NAME, TYPE, OP) \
-  FORCE_INLINE                           \
-  TYPE NAME##_##TYPE##_##TYPE(TYPE left, TYPE right) { return left OP right; }
+#define BINARY_SYMMETRIC(NAME, TYPE, OP)               \
+  FORCE_INLINE                                         \
+  TYPE NAME##_##TYPE##_##TYPE(TYPE left, TYPE right) { \
+    return static_cast<TYPE>(left OP right);           \
+  }
 
 NUMERIC_TYPES(BINARY_SYMMETRIC, add, +)
 NUMERIC_TYPES(BINARY_SYMMETRIC, subtract, -)
 NUMERIC_TYPES(BINARY_SYMMETRIC, multiply, *)
-NUMERIC_TYPES(BINARY_SYMMETRIC, divide, /)
 
 MOD_OP(mod, int64, int32, int32)
 MOD_OP(mod, int64, int64, int64)
@@ -155,5 +156,25 @@ boolean not_boolean(boolean in) { return !in; }
 
 NUMERIC_BOOL_DATE_FUNCTION(IS_DISTINCT_FROM)
 NUMERIC_BOOL_DATE_FUNCTION(IS_NOT_DISTINCT_FROM)
+
+// divide - handles invalid args as nulls
+#define DIVIDE_NULL_INTERNAL(TYPE)                                                      \
+  FORCE_INLINE                                                                          \
+  TYPE divide_##TYPE##_##TYPE(TYPE in1, boolean is_valid1, TYPE in2, boolean is_valid2, \
+                              int64 execution_context, bool* out_valid) {               \
+    *out_valid = false;                                                                 \
+    if (!is_valid1 || !is_valid2) {                                                     \
+      return 0;                                                                         \
+    }                                                                                   \
+    if (in2 == 0) {                                                                     \
+      char const* err_msg = "divide by zero error";                                     \
+      context_set_error_msg(execution_context, err_msg);                                \
+      return 0;                                                                         \
+    }                                                                                   \
+    *out_valid = true;                                                                  \
+    return static_cast<TYPE>(in1 / in2);                                                \
+  }
+
+NUMERIC_FUNCTION(DIVIDE_NULL_INTERNAL)
 
 }  // extern "C"

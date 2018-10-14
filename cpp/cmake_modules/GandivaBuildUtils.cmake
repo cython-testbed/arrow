@@ -19,6 +19,7 @@
 function(build_gandiva_lib TYPE ARROW)
   string(TOUPPER ${TYPE} TYPE_UPPER_CASE)
   add_library(gandiva_${TYPE} ${TYPE_UPPER_CASE} $<TARGET_OBJECTS:gandiva_obj_lib>)
+  add_dependencies(gandiva_${TYPE} arrow_dependencies)
 
   target_include_directories(gandiva_${TYPE}
     PUBLIC
@@ -38,7 +39,7 @@ function(build_gandiva_lib TYPE ARROW)
       Boost::system
       Boost::filesystem
       LLVM::LLVM_INTERFACE
-      ${RE2_STATIC_LIB})
+      re2)
 
   if (${TYPE} MATCHES "static" AND NOT APPLE)
     target_link_libraries(gandiva_${TYPE}
@@ -60,9 +61,9 @@ function(build_gandiva_lib TYPE ARROW)
 endfunction(build_gandiva_lib TYPE)
 
 set(GANDIVA_TEST_LINK_LIBS
-  ${GTEST_STATIC_LIB}
-  ${GTEST_MAIN_STATIC_LIB}
-  ${RE2_STATIC_LIB})
+  gtest
+  gtest_main
+  re2)
 
 if (PTHREAD_LIBRARY)
   set(GANDIVA_TEST_LINK_LIBS
@@ -82,6 +83,9 @@ function(add_gandiva_unit_test REL_TEST_NAME)
     target_link_libraries(${TEST_NAME} PRIVATE LLVM::LLVM_INTERFACE)
   endif()
 
+  # Require toolchain to be built
+  add_dependencies(${TEST_NAME} arrow_dependencies)
+
   target_include_directories(${TEST_NAME} PRIVATE
     ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/src
@@ -90,7 +94,7 @@ function(add_gandiva_unit_test REL_TEST_NAME)
     PRIVATE arrow_shared ${GANDIVA_TEST_LINK_LIBS} Boost::boost
   )
   add_test(NAME ${TEST_NAME} COMMAND ${TEST_NAME})
-  set_property(TEST ${TEST_NAME} PROPERTY LABELS unittest ${TEST_NAME})
+  set_property(TEST ${TEST_NAME} PROPERTY LABELS gandiva,unittest ${TEST_NAME})
 endfunction(add_gandiva_unit_test REL_TEST_NAME)
 
 # Add a unittest executable for a precompiled file (used to generate IR)
@@ -98,11 +102,14 @@ function(add_precompiled_unit_test REL_TEST_NAME)
   get_filename_component(TEST_NAME ${REL_TEST_NAME} NAME_WE)
 
   add_executable(${TEST_NAME} ${REL_TEST_NAME} ${ARGN})
+  # Require toolchain to be built
+  add_dependencies(${TEST_NAME} arrow_dependencies)
   target_include_directories(${TEST_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/src)
   target_link_libraries(${TEST_NAME} PRIVATE ${GANDIVA_TEST_LINK_LIBS})
   target_compile_definitions(${TEST_NAME} PRIVATE GANDIVA_UNIT_TEST=1)
+  target_compile_definitions(${TEST_NAME} PRIVATE -DGDV_HELPERS)
   add_test(NAME ${TEST_NAME} COMMAND ${TEST_NAME})
-  set_property(TEST ${TEST_NAME} PROPERTY LABELS unittest ${TEST_NAME})
+  set_property(TEST ${TEST_NAME} PROPERTY LABELS gandiva,unittest ${TEST_NAME})
 endfunction(add_precompiled_unit_test REL_TEST_NAME)
 
 # Add an integ executable, with its dependencies.
@@ -114,7 +121,7 @@ function(add_gandiva_integ_test REL_TEST_NAME GANDIVA_LIB)
   target_link_libraries(${TEST_NAME}_${GANDIVA_LIB} PRIVATE ${GANDIVA_LIB} ${GANDIVA_TEST_LINK_LIBS})
 
   add_test(NAME ${TEST_NAME}_${GANDIVA_LIB} COMMAND ${TEST_NAME}_${GANDIVA_LIB})
-  set_property(TEST ${TEST_NAME}_${GANDIVA_LIB} PROPERTY LABELS integ ${TEST_NAME}_${GANDIVA_LIB})
+  set_property(TEST ${TEST_NAME}_${GANDIVA_LIB} PROPERTY LABELS gandiva,integ ${TEST_NAME}_${GANDIVA_LIB})
 endfunction(add_gandiva_integ_test REL_TEST_NAME)
 
 function(prevent_in_source_builds)

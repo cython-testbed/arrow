@@ -17,10 +17,6 @@
 
 project(gandiva_jni)
 
-# Find protobuf
-set(Protobuf_USE_STATIC_LIBS "ON")
-find_package(Protobuf REQUIRED)
-
 # Find JNI
 find_package(JNI REQUIRED)
 
@@ -35,7 +31,7 @@ get_filename_component(ABS_GANDIVA_PROTO ${CMAKE_SOURCE_DIR}/src/gandiva/proto/T
 add_custom_command(
   OUTPUT ${PROTO_OUTPUT_FILES}
   COMMAND ${PROTOBUF_EXECUTABLE} --proto_path ${CMAKE_SOURCE_DIR}/src/gandiva/proto --cpp_out ${PROTO_OUTPUT_DIR} ${CMAKE_SOURCE_DIR}/src/gandiva/proto/Types.proto
-  DEPENDS ${ABS_GANDIVA_PROTO}
+  DEPENDS ${ABS_GANDIVA_PROTO} protobuf
   COMMENT "Running PROTO compiler on Types.proto"
   VERBATIM
 )
@@ -72,7 +68,14 @@ target_include_directories(gandiva_jni
     ${CMAKE_SOURCE_DIR}/src
 )
 
-# PROTOBUF is a private dependency i.e users of gandiva also will not have a dependency on protobuf.
+# filter out everything that is not needed for the jni bridge
+# statically linked stdc++ has conflicts with stdc++ loaded by other libraries.
+if (NOT APPLE)
+set_target_properties(gandiva_jni PROPERTIES LINK_FLAGS "-Wl,--version-script=${CMAKE_SOURCE_DIR}/src/gandiva/jni/symbols.map")
+endif()
+
+# PROTOBUF is a private dependency i.e users of gandiva also will not have a 
+# dependency on protobuf.
 target_link_libraries(gandiva_jni
   PRIVATE
     ${PROTOBUF_STATIC_LIB}

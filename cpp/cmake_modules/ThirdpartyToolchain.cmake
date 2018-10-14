@@ -15,11 +15,16 @@
 # specific language governing permissions and limitations
 # under the License.
 
+# ----------------------------------------------------------------------
+# Toolchain linkage options
+
+set(ARROW_RE2_LINKAGE "static" CACHE STRING
+  "How to link the re2 library. static|shared (default static)")
 
 # ----------------------------------------------------------------------
 # Thirdparty versions, environment variables, source URLs
 
-set(THIRDPARTY_DIR "${CMAKE_SOURCE_DIR}/thirdparty")
+set(THIRDPARTY_DIR "${arrow_SOURCE_DIR}/thirdparty")
 
 if (NOT "$ENV{ARROW_BUILD_TOOLCHAIN}" STREQUAL "")
   set(BROTLI_HOME "$ENV{ARROW_BUILD_TOOLCHAIN}")
@@ -37,7 +42,8 @@ if (NOT "$ENV{ARROW_BUILD_TOOLCHAIN}" STREQUAL "")
   # set(ORC_HOME "$ENV{ARROW_BUILD_TOOLCHAIN}")
   set(PROTOBUF_HOME "$ENV{ARROW_BUILD_TOOLCHAIN}")
   set(RAPIDJSON_HOME "$ENV{ARROW_BUILD_TOOLCHAIN}")
-  set(RE2_HOME "$ENV{ARROW_BUILD_TOOLCHAIN}")
+  # ARROW-3494: conda-forge re2 does not work yet
+  # set(RE2_HOME "$ENV{ARROW_BUILD_TOOLCHAIN}")
   set(SNAPPY_HOME "$ENV{ARROW_BUILD_TOOLCHAIN}")
   set(THRIFT_HOME "$ENV{ARROW_BUILD_TOOLCHAIN}")
   set(ZLIB_HOME "$ENV{ARROW_BUILD_TOOLCHAIN}")
@@ -98,6 +104,10 @@ endif()
 
 if (DEFINED ENV{RAPIDJSON_HOME})
   set(RAPIDJSON_HOME "$ENV{RAPIDJSON_HOME}")
+endif()
+
+if (DEFINED ENV{RE2_HOME})
+  set(RE2_HOME "$ENV{RAPIDJSON_HOME}")
 endif()
 
 if (DEFINED ENV{SNAPPY_HOME})
@@ -169,8 +179,8 @@ else()
   set(BROTLI_SOURCE_URL "https://github.com/google/brotli/archive/${BROTLI_VERSION}.tar.gz")
 endif()
 
-if (DEFINED ENV{DOUBLE_CONVERSION_SOURCE_URL})
-  set(DOUBLE_CONVERSION_SOURCE_URL "$ENV{DOUBLE_CONVERSION_SOURCE_URL}")
+if (DEFINED ENV{ARROW_DOUBLE_CONVERSION_URL})
+  set(DOUBLE_CONVERSION_SOURCE_URL "$ENV{ARROW_DOUBLE_CONVERSION_URL}")
 else()
   set(DOUBLE_CONVERSION_SOURCE_URL "https://github.com/google/double-conversion/archive/${DOUBLE_CONVERSION_VERSION}.tar.gz")
 endif()
@@ -228,6 +238,12 @@ if (DEFINED ENV{ARROW_PROTOBUF_URL})
 else()
   string(SUBSTRING ${PROTOBUF_VERSION} 1 -1 STRIPPED_PROTOBUF_VERSION)  # strip the leading `v`
   set(PROTOBUF_SOURCE_URL "https://github.com/protocolbuffers/protobuf/releases/download/${PROTOBUF_VERSION}/protobuf-all-${STRIPPED_PROTOBUF_VERSION}.tar.gz")
+endif()
+
+if (DEFINED ENV{ARROW_RE2_URL})
+  set(RE2_SOURCE_URL "$ENV{ARROW_RE2_URL}")
+else()
+  set(RE2_SOURCE_URL "https://github.com/google/re2/archive/${RE2_VERSION}.tar.gz")
 endif()
 
 set(RAPIDJSON_SOURCE_MD5 "badd12c511e081fec6c89c43a7027bce")
@@ -473,10 +489,10 @@ else()
 endif()
 
 include_directories(SYSTEM ${DOUBLE_CONVERSION_INCLUDE_DIR})
-ADD_THIRDPARTY_LIB(double-conversion
-  STATIC_LIB ${DOUBLE_CONVERSION_STATIC_LIB})
 
 if (DOUBLE_CONVERSION_VENDORED)
+  ADD_THIRDPARTY_LIB(double-conversion::double-conversion
+    STATIC_LIB ${DOUBLE_CONVERSION_STATIC_LIB})
   add_dependencies(arrow_dependencies double-conversion_ep)
 endif()
 
@@ -721,7 +737,7 @@ if (ARROW_JEMALLOC)
     CONFIGURE_COMMAND ./autogen.sh "--prefix=${JEMALLOC_PREFIX}" "--with-jemalloc-prefix=je_arrow_" "--with-private-namespace=je_arrow_private_" "--disable-tls"
     ${EP_LOG_OPTIONS}
     BUILD_IN_SOURCE 1
-    BUILD_COMMAND ${MAKE}
+    BUILD_COMMAND ${MAKE} -j
     BUILD_BYPRODUCTS "${JEMALLOC_STATIC_LIB}" "${JEMALLOC_SHARED_LIB}"
     INSTALL_COMMAND ${MAKE} -j1 install)
 
@@ -1057,23 +1073,66 @@ if (ARROW_WITH_ZSTD)
   endif()
 endif()
 
+# ----------------------------------------------------------------------
+# RE2 (required for Gandiva)
+if (ARROW_GANDIVA)
+  # re2
+  if ("${RE2_HOME}" STREQUAL "")
+    set (RE2_PREFIX "${CMAKE_CURRENT_BINARY_DIR}/re2_ep-install")
+    set (RE2_HOME "${RE2_PREFIX}")
+    set (RE2_INCLUDE_DIR "${RE2_PREFIX}/include")
+    set (RE2_STATIC_LIB "${RE2_PREFIX}/lib/${CMAKE_STATIC_LIBRARY_PREFIX}re2${CMAKE_STATIC_LIBRARY_SUFFIX}")
+
+    set(RE2_CMAKE_ARGS
+          "-DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}"
+          "-DCMAKE_CXX_FLAGS=${EP_CXX_FLAGS}"
+          "-DCMAKE_CXX_FLAGS_${UPPERCASE_BUILD_TYPE}=${EP_CXX_FLAGS}"
+          "-DCMAKE_INSTALL_PREFIX=${RE2_PREFIX}")
+    ExternalProject_Add(re2_ep
+      ${EP_LOG_OPTIONS}
+      INSTALL_DIR ${RE2_PREFIX}
+      URL ${RE2_SOURCE_URL}
+      CMAKE_ARGS ${RE2_CMAKE_ARGS}
+      BUILD_BYPRODUCTS "${RE2_STATIC_LIB}")
+    set (RE2_VENDORED 1)
+  else ()
+    find_package (RE2 REQUIRED)
+    set (RE2_VENDORED 0)
+  endif ()
+
+  include_directories (SYSTEM ${RE2_INCLUDE_DIR})
+
+  if (ARROW_RE2_LINKAGE STREQUAL "shared")
+    ADD_THIRDPARTY_LIB(re2
+      STATIC_LIB ${RE2_SHARED_LIB})
+  else()
+    ADD_THIRDPARTY_LIB(re2
+      STATIC_LIB ${RE2_STATIC_LIB})
+  endif()
+
+  if (RE2_VENDORED)
+    add_dependencies (arrow_dependencies re2_ep)
+  endif ()
+endif ()
+
 
 # ----------------------------------------------------------------------
-# Protocol Buffers (required for ORC and Flight libraries)
+# Protocol Buffers (required for ORC and Flight and Gandiva libraries)
 
-if (ARROW_ORC OR ARROW_FLIGHT)
+if (ARROW_ORC OR ARROW_FLIGHT OR ARROW_GANDIVA)
   # protobuf
   if ("${PROTOBUF_HOME}" STREQUAL "")
     set (PROTOBUF_PREFIX "${THIRDPARTY_DIR}/protobuf_ep-install")
     set (PROTOBUF_HOME "${PROTOBUF_PREFIX}")
     set (PROTOBUF_INCLUDE_DIR "${PROTOBUF_PREFIX}/include")
     set (PROTOBUF_STATIC_LIB "${PROTOBUF_PREFIX}/lib/${CMAKE_STATIC_LIBRARY_PREFIX}protobuf${CMAKE_STATIC_LIBRARY_SUFFIX}")
+    set (PROTOBUF_EXECUTABLE "${PROTOBUF_PREFIX}/bin/protoc")
 
     ExternalProject_Add(protobuf_ep
       CONFIGURE_COMMAND "./configure" "--disable-shared" "--prefix=${PROTOBUF_PREFIX}" "CXXFLAGS=${EP_CXX_FLAGS}"
       BUILD_IN_SOURCE 1
       URL ${PROTOBUF_SOURCE_URL}
-      BUILD_BYPRODUCTS "${PROTOBUF_STATIC_LIB}"
+      BUILD_BYPRODUCTS "${PROTOBUF_STATIC_LIB}" "${PROTOBUF_EXECUTABLE}"
       ${EP_LOG_OPTIONS})
 
     set (PROTOBUF_VENDORED 1)

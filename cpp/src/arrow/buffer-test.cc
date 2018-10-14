@@ -20,6 +20,8 @@
 #include <limits>
 #include <memory>
 #include <string>
+#include <utility>
+#include <vector>
 
 #include <gtest/gtest.h>
 
@@ -139,6 +141,21 @@ TEST(TestMutableBuffer, Wrap) {
   reinterpret_cast<int32_t*>(buf->mutable_data())[1] = 4;
 
   ASSERT_EQ(4, values[1]);
+}
+
+TEST(TestBuffer, FromStringRvalue) {
+  std::string expected = "input data";
+
+  std::shared_ptr<Buffer> buffer;
+  {
+    std::string data_str = "input data";
+    buffer = Buffer::FromString(std::move(data_str));
+  }
+
+  ASSERT_FALSE(buffer->is_mutable());
+
+  ASSERT_EQ(0, memcmp(buffer->data(), expected.c_str(), expected.size()));
+  ASSERT_EQ(static_cast<int64_t>(expected.size()), buffer->size());
 }
 
 TEST(TestBuffer, SliceMutableBuffer) {

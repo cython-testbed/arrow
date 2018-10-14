@@ -27,7 +27,7 @@ import pandas as pd
 import pandas.util.testing as tm
 
 import pyarrow as pa
-from pyarrow.compat import guid, u, BytesIO, unichar
+from pyarrow.compat import guid, u, BytesIO, unichar, PY2
 from pyarrow.tests import util
 from pyarrow.filesystem import LocalFileSystem
 from .pandas_examples import dataframe_with_arrays, dataframe_with_lists
@@ -767,15 +767,53 @@ def test_coerce_timestamps(tempdir):
                      coerce_timestamps='unknown')
 
 
+def test_coerce_timestamps_truncated(tempdir):
+    """
+    ARROW-2555: Test that we can truncate timestamps when coercing if
+    explicitly allowed.
+    """
+    dt_us = datetime.datetime(year=2017, month=1, day=1, hour=1, minute=1,
+                              second=1, microsecond=1)
+    dt_ms = datetime.datetime(year=2017, month=1, day=1, hour=1, minute=1,
+                              second=1)
+
+    fields_us = [pa.field('datetime64', pa.timestamp('us'))]
+    arrays_us = {'datetime64': [dt_us, dt_ms]}
+
+    df_us = pd.DataFrame(arrays_us)
+    schema_us = pa.schema(fields_us)
+
+    filename = tempdir / 'pandas_truncated.parquet'
+    table_us = pa.Table.from_pandas(df_us, schema=schema_us)
+
+    _write_table(table_us, filename, version="2.0", coerce_timestamps='ms',
+                 allow_truncated_timestamps=True)
+    table_ms = _read_table(filename)
+    df_ms = table_ms.to_pandas()
+
+    arrays_expected = {'datetime64': [dt_ms, dt_ms]}
+    df_expected = pd.DataFrame(arrays_expected)
+    tm.assert_frame_equal(df_expected, df_ms)
+
+
 def test_column_of_lists(tempdir):
-    df, schema = dataframe_with_lists()
+    df, schema = dataframe_with_lists(parquet_compatible=True)
 
     filename = tempdir / 'pandas_rountrip.parquet'
     arrow_table = pa.Table.from_pandas(df, schema=schema)
-    _write_table(arrow_table, filename, version='2.0',
-                 coerce_timestamps='ms')
+    _write_table(arrow_table, filename, version='2.0')
     table_read = _read_table(filename)
     df_read = table_read.to_pandas()
+
+    if PY2:
+        # assert_frame_equal fails when comparing datetime.date and
+        # np.datetime64, even with check_datetimelike_compat=True so
+        # convert the values to np.datetime64 instead
+        for col in ['date32[day]_list', 'date64[ms]_list']:
+            df[col] = df[col].apply(
+                lambda x: list(map(np.datetime64, x)) if x else x
+            )
+
     tm.assert_frame_equal(df, df_read)
 
 
@@ -1124,6 +1162,8 @@ def test_equivalency(tempdir):
 
     _generate_partition_directories(fs, base_path, partition_spec, df)
 
+    # Old filters syntax:
+    #  integer == 1 AND string != b AND boolean == True
     dataset = pq.ParquetDataset(
         base_path, filesystem=fs,
         filters=[('integer', '=', 1), ('string', '!=', 'b'),
@@ -1135,6 +1175,44 @@ def test_equivalency(tempdir):
     assert 0 not in result_df['integer'].values
     assert 'b' not in result_df['string'].values
     assert False not in result_df['boolean'].values
+
+    # filters in disjunctive normal form:
+    #  (integer == 1 AND string != b AND boolean == True) OR
+    #  (integer == 2 AND boolean == False)
+    # TODO(ARROW-3388): boolean columns are reconstructed as string
+    filters = [
+        [
+            ('integer', '=', 1),
+            ('string', '!=', 'b'),
+            ('boolean', '==', 'True')
+        ],
+        [('integer', '=', 0), ('boolean', '==', 'False')]
+    ]
+    dataset = pq.ParquetDataset(base_path, filesystem=fs, filters=filters)
+    table = dataset.read()
+    result_df = table.to_pandas().reset_index(drop=True)
+
+    # Check that all rows in the DF fulfill the filter
+    # Pandas 0.23.x has problems with indexing constant memoryviews in
+    # categoricals. Thus we need to make an explicity copy here with np.array.
+    df_filter_1 = (np.array(result_df['integer']) == 1) \
+        & (np.array(result_df['string']) != 'b') \
+        & (np.array(result_df['boolean']) == 'True')
+    df_filter_2 = (np.array(result_df['integer']) == 0) \
+        & (np.array(result_df['boolean']) == 'False')
+    assert df_filter_1.sum() > 0
+    assert df_filter_2.sum() > 0
+    assert result_df.shape[0] == (df_filter_1.sum() + df_filter_2.sum())
+
+    # Check for \0 in predicate values. Until they are correctly implemented
+    # in ARROW-3391, they would otherwise lead to weird results with the
+    # current code.
+    with pytest.raises(NotImplementedError):
+        filters = [[('string', '==', b'1\0a')]]
+        pq.ParquetDataset(base_path, filesystem=fs, filters=filters)
+    with pytest.raises(NotImplementedError):
+        filters = [[('string', '==', u'1\0a')]]
+        pq.ParquetDataset(base_path, filesystem=fs, filters=filters)
 
 
 def test_cutoff_exclusive_integer(tempdir):
@@ -1442,14 +1520,15 @@ def _test_read_common_metadata_files(fs, base_path):
         'values': np.random.randn(N)
     }, columns=['index', 'values'])
 
-    data_path = base_path / 'data.parquet'
+    base_path = str(base_path)
+    data_path = os.path.join(base_path, 'data.parquet')
 
     table = pa.Table.from_pandas(df)
 
     with fs.open(data_path, 'wb') as f:
         _write_table(table, f)
 
-    metadata_path = base_path / '_common_metadata'
+    metadata_path = os.path.join(base_path, '_common_metadata')
     with fs.open(metadata_path, 'wb') as f:
         pq.write_metadata(table.schema, f)
 

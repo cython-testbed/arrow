@@ -19,6 +19,7 @@
 #define ARROW_BUFFER_H
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <cstring>
 #include <memory>
@@ -123,6 +124,12 @@ class ARROW_EXPORT Buffer {
   /// \brief Construct a new buffer that owns its memory from a std::string
   /// using the default memory pool
   static Status FromString(const std::string& data, std::shared_ptr<Buffer>* out);
+
+  /// \brief Construct an immutable buffer that takes ownership of the contents
+  /// of an std::string
+  /// \param[in] data an rvalue-reference of a string
+  /// \return a new Buffer instance
+  static std::shared_ptr<Buffer> FromString(std::string&& data);
 
   /// \brief Create buffer referencing typed memory with some length without
   /// copying
